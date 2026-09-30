@@ -745,7 +745,12 @@ pub async fn handle_api_access_key_request(req: &HttpRequest) -> HttpResponse {
     // };
 
     let area_num: u8 = match query.get("area_num") {
-        Some(key) => key.parse().unwrap(),
+        Some(key) => match key.parse() {
+            Ok(value) => value,
+            Err(_) => {
+                build_response!(-10403, "参数错误: area_num非法");
+            }
+        },
         _ => {
             // query param must have "area", or must be invalid req
             build_response!(-10403, "参数错误: area_num为空");

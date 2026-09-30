@@ -353,7 +353,7 @@ pub async fn get_resigned_access_key(
                 error!("[GET RESIGN] json解析失败: {}", upstream_raw_resp);
                 return None;
             };
-        if upstream_raw_resp_json["code"].as_i64().unwrap() != 0 {
+        if upstream_raw_resp_json["code"].as_i64().unwrap_or(-2333) != 0 {
             error!("[GET RESIGN] err3");
             return None;
         }

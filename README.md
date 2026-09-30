@@ -24,6 +24,10 @@
 
 ## [使用说明]
 
+> **⚠️ 部署前请先阅读 [DEPLOY.md](DEPLOY.md)**
+> 本文档成文于 2023 年，部分内容已过时（例如 `config.example.*` 的字段格式、部分上游接口已失效）。
+> DEPLOY.md 记录了当前（2026-10）实测有效的配置格式、代理接线方法与已知失效项。
+
 ### 1. 使用一键安装器
 * 将域名解析至您的服务器
 *  `wget -c -t 5 https://github.com/pchpub/biliroaming-rust-server-installer/releases/download/v0.1.0/biliroaming-rust-server-installer && chmod 777 biliroaming-rust-server-installer && ./biliroaming-rust-server-installer` 

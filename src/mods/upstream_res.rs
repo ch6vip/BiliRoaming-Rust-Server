@@ -194,7 +194,7 @@ pub fn get_upstream_bili_account_info_rec<'rec>(
                     let output_struct = UserInfo {
                         code: 0,
                         access_key: String::from(access_key),
-                        uid: upstream_raw_resp_json["data"]["mid"].as_u64().unwrap(),
+                        uid: upstream_raw_resp_json["data"]["mid"].as_u64().unwrap_or(0),
                         vip_expire_time,
                         expire_time: {
                             if ts < vip_expire_time
@@ -692,7 +692,7 @@ pub async fn get_upstream_blacklist_info(
     let code = upstream_raw_resp_json["code"].as_i64().unwrap_or(233);
     if code == 0 {
         let return_data = UserCerinfo {
-            uid: upstream_raw_resp_json["data"]["uid"].as_u64().unwrap(),
+            uid: upstream_raw_resp_json["data"]["uid"].as_u64().unwrap_or(0),
             black: upstream_raw_resp_json["data"]["is_blacklist"]
                 .as_bool()
                 .unwrap_or(false),
@@ -908,7 +908,7 @@ pub async fn get_upstream_bili_playurl(
             return Err(EType::ServerGeneral);
         }
     };
-    let code = upstream_raw_resp_json["code"].as_i64().unwrap().clone();
+    let code = upstream_raw_resp_json["code"].as_i64().unwrap_or(-2333);
     remove_parameters_playurl(&playurl_type, &mut upstream_raw_resp_json).unwrap_or_default();
 
     update_area_cache(&upstream_raw_resp_json, params, bili_runtime).await;
@@ -1197,7 +1197,7 @@ pub async fn get_upstream_bili_playurl_background(
             return Err(EType::ServerGeneral);
         }
     };
-    let code = upstream_raw_resp_json["code"].as_i64().unwrap().clone();
+    let code = upstream_raw_resp_json["code"].as_i64().unwrap_or(-2333);
     remove_parameters_playurl(&playurl_type, &mut upstream_raw_resp_json).unwrap_or_default();
 
     // update_area_cache(&body_data_json, params, bili_runtime).await;
@@ -1333,7 +1333,35 @@ pub async fn get_upstream_bili_search(
     .await
     {
         Ok(data) => {
-            let data_json: serde_json::Value = data.json().unwrap();
+            let data_json: serde_json::Value = match data.json() {
+                Some(value) => value,
+                None => {
+                    error!(
+                        "[GET SEARCH][U] AREA {} | PROXY_OPEN {} | PROXY_URL {} -> 上游返回非JSON (可能风控412). 上游返回: {}",
+                        params.area.to_ascii_uppercase(), proxy_open, proxy_url, data
+                    );
+                    report_health(
+                        HealthReportType::Search(HealthData {
+                            area_num: params.area_num,
+                            is_200_ok: true,
+                            upstream_reply: UpstreamReply {
+                                upstream_header: data.read_headers(),
+                                proxy_open,
+                                proxy_url: String::from(proxy_url),
+                                ..Default::default()
+                            },
+                            is_custom: true,
+                            custom_message: format!(
+                                "[GET SEARCH][U] 上游返回非JSON, 可能被风控. 返回内容: {}",
+                                data
+                            ),
+                        }),
+                        bili_runtime,
+                    )
+                    .await;
+                    return Err(EType::ServerReqError("上游返回非JSON"));
+                }
+            };
             let upstream_code = data_json["code"].as_i64().unwrap_or(233);
             let upstream_message = data_json["message"].as_str().unwrap_or("NULL");
             report_health(
@@ -1475,7 +1503,17 @@ pub async fn get_upstream_bili_season(
             // println!("[Debug] data:{}", data);
             let season_remake = move || async move {
                 if config.th_app_season_sub_open || config.aid_replace_open {
-                    let mut body_data_json: serde_json::Value = body_data.json().unwrap();
+                    let mut body_data_json: serde_json::Value = match body_data.json() {
+                        Some(value) => value,
+                        None => {
+                            // 上游返回非JSON (风控页/502/空响应) 时不再panic, 直接透传原始内容
+                            error!(
+                                "[GET TH_SEASON][U] 上游返回非JSON, 跳过season改写. 返回内容: {}",
+                                body_data
+                            );
+                            return body_data.resp_content;
+                        }
+                    };
                     let user_agent = params.user_agent;
                     if config.aid_replace_open {
                         let len_of_episodes = match body_data_json["result"]["modules"][0]["data"]
@@ -1509,7 +1547,7 @@ pub async fn get_upstream_bili_season(
                         match &body_data_json["result"] {
                             serde_json::Value::Object(value) => {
                                 is_result = true;
-                                season_id = Some(value["season_id"].as_u64().unwrap());
+                                season_id = value["season_id"].as_u64();
                             }
                             serde_json::Value::Null => {
                                 is_result = false;
@@ -1518,7 +1556,7 @@ pub async fn get_upstream_bili_season(
                                         season_id = None;
                                     }
                                     serde_json::Value::Object(value) => {
-                                        season_id = Some(value["season_id"].as_u64().unwrap());
+                                        season_id = value["season_id"].as_u64();
                                     }
                                     _ => {
                                         season_id = None;
@@ -1595,21 +1633,35 @@ pub async fn get_upstream_bili_season(
                             }
                         }
                         let mut index_of_replace_json = 0;
-                        let len_of_replace_json =
-                            sub_replace_json["data"].as_array().unwrap().len();
+                        let replace_data = match sub_replace_json["data"].as_array() {
+                            Some(value) => value,
+                            None => {
+                                error!(
+                                    "[GET TH_SEASON][U] 外挂字幕 data 非数组, 跳过字幕注入. 上游返回: {sub_replace_json}"
+                                );
+                                if config.aid_replace_open {
+                                    return serde_json::to_string(&body_data_json).unwrap();
+                                } else {
+                                    return body_data.resp_content;
+                                }
+                            }
+                        };
+                        let len_of_replace_json = replace_data.len();
                         while index_of_replace_json < len_of_replace_json {
-                            let ep: usize = sub_replace_json["data"][index_of_replace_json]["ep"]
-                                .as_u64()
-                                .unwrap() as usize;
-                            let key = sub_replace_json["data"][index_of_replace_json]["key"]
-                                .as_str()
-                                .unwrap();
-                            let lang = sub_replace_json["data"][index_of_replace_json]["lang"]
-                                .as_str()
-                                .unwrap();
-                            let url = sub_replace_json["data"][index_of_replace_json]["url"]
-                                .as_str()
-                                .unwrap();
+                            let item = &replace_data[index_of_replace_json];
+                            let ep: usize = match item["ep"].as_u64() {
+                                Some(value) => value as usize,
+                                None => {
+                                    error!(
+                                        "[GET TH_SEASON][U] 外挂字幕项缺少 ep 字段, 跳过该项. item: {item}"
+                                    );
+                                    index_of_replace_json += 1;
+                                    continue;
+                                }
+                            };
+                            let key = item["key"].as_str().unwrap_or("");
+                            let lang = item["lang"].as_str().unwrap_or("");
+                            let url = item["url"].as_str().unwrap_or("");
                             if is_result {
                                 let element = format!("{{\"id\":{index_of_replace_json},\"key\":\"{key}\",\"title\":\"[非官方] {lang} {}\",\"url\":\"https://{url}\"}}",config.th_app_season_sub_name);
                                 body_data_json["result"]["modules"][0]["data"]["episodes"][ep]
@@ -1697,22 +1749,32 @@ pub async fn get_upstream_bili_ep_info(
                 .unwrap_or(series_title.as_str())
                 .to_string();
             let season_id = result_json["season_id"].as_u64().unwrap_or(0);
-            let episodes = &result_json["episodes"];
-            for episode in episodes.as_array().unwrap() {
-                let episode = episode.as_object().unwrap();
+            let episodes = match result_json["episodes"].as_array() {
+                Some(value) => value,
+                None => {
+                    error!(
+                        "[GET EP_INFO] EP {ep_id} -> 上游 episodes 非数组, 无法解析. 上游返回: {value_json}"
+                    );
+                    return Err(-2333);
+                }
+            };
+            for episode in episodes {
+                let episode = match episode.as_object() {
+                    Some(value) => value,
+                    None => continue,
+                };
                 let episode_ep_id = episode["ep_id"].as_u64().unwrap_or(0);
                 let episode_need_vip = {
-                    if episode.contains_key("badge") || episode.contains_key("badge_type") {
-                        // DEBUG
-                        debug!(
-                            "Detect EP {episode_ep_id} need vip: badge {} badge_type {}",
-                            episode["badge"].as_str().unwrap_or("N/A"),
-                            episode["badge_type"].as_str().unwrap_or("N/A")
-                        );
-                        true
-                    } else {
-                        false
-                    }
+                    // 注: B站对免费集也会返回 badge 字段(空字符串), 因此不能以"键是否存在"判断,
+                    // 必须检查 badge 的实际取值. 实测取值: ""(免费) / "会员"(大会员) / "预告"(预告片)
+                    let badge = episode["badge"].as_str().unwrap_or("");
+                    let need_vip = badge.contains("会员");
+                    debug!(
+                        "Detect EP {episode_ep_id} need vip: {need_vip} badge '{}' badge_type {}",
+                        badge,
+                        episode["badge_type"].as_i64().unwrap_or(-1)
+                    );
+                    need_vip
                 };
                 let ep_info = EpInfo {
                     ep_id: episode_ep_id,

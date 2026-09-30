@@ -364,7 +364,7 @@ pub async fn background_task_run(
                                 match code {
                                     0 => {
                                         let result = json_result.get("result").unwrap();
-                                        if result["area_limit"].as_i64().unwrap() != 0 {
+                                        if result["area_limit"].as_i64().unwrap_or(1) != 0 {
                                             ep_area_data[(area_num - 1) as usize] = "1";
                                         } else {
                                             ep_area_data[3 as usize] = "1";

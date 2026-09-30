@@ -92,7 +92,11 @@ pub fn check_vip_status_from_playurl(
                 }
 
                 if quality_need_vip.len() != 0 {
-                    for video in data["result"]["dash"]["video"].as_array().unwrap() {
+                    let videos = match data["result"]["dash"]["video"].as_array() {
+                        Some(value) => value,
+                        None => return Err(()),
+                    };
+                    for video in videos {
                         if quality_need_vip.contains(&video["id"].as_u64().unwrap_or(0)) {
                             return Ok(true);
                         }
@@ -197,8 +201,10 @@ pub async fn remove_viponly_clarity<'a>(
                         debug!("[TOOLS] 解析JSON失败: {data}");
                         return None;
                     };
-                data_json.as_object_mut().unwrap().remove("vip_type");
-                data_json.as_object_mut().unwrap().remove("vip_status");
+                if let Some(obj) = data_json.as_object_mut() {
+                    obj.remove("vip_type");
+                    obj.remove("vip_status");
+                }
                 data_json["has_paid"] = serde_json::Value::Bool(false);
                 let mut quality_to_del: Vec<u64> = vec![];
                 let mut support_format_allowed = serde_json::Value::Null; //获取最高画质那档的信息
@@ -211,7 +217,7 @@ pub async fn remove_viponly_clarity<'a>(
                         return None;
                     };
                 support_formats.retain(|support_format| {
-                    if support_format.as_object().unwrap().contains_key("need_vip")
+                    if support_format.get("need_vip").is_some()
                         && support_format["need_vip"].as_bool().unwrap_or(true)
                     {
                         quality_to_del.push(support_format["quality"].as_u64().unwrap_or(0));
@@ -261,19 +267,21 @@ pub async fn remove_viponly_clarity<'a>(
                 } else {
                     return None;
                 };
-                data_json_result.as_object_mut().unwrap().remove("vip_type");
-                data_json_result
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("vip_status");
+                if let Some(obj) = data_json_result.as_object_mut() {
+                    obj.remove("vip_type");
+                    obj.remove("vip_status");
+                }
                 data_json_result["has_paid"] = serde_json::Value::Bool(false);
                 let mut quality_to_del: Vec<u64> = vec![];
                 let mut support_format_allowed = serde_json::Value::Null; //获取最高画质那档的信息
                 let mut support_format_allowed_found = false;
                 // 不应当删除support_format里面的内容, 否则网页端显示异常, APP端没影响就保持原样了
-                let support_formats = data_json_result["support_formats"].as_array_mut().unwrap();
+                let support_formats = match data_json_result["support_formats"].as_array_mut() {
+                    Some(value) => value,
+                    None => return None,
+                };
                 for support_format in support_formats {
-                    if support_format.as_object().unwrap().contains_key("need_vip")
+                    if support_format.get("need_vip").is_some()
                         && support_format["need_vip"].as_bool().unwrap_or(true)
                     {
                         quality_to_del.push(support_format["quality"].as_u64().unwrap_or(0));

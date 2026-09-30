@@ -115,7 +115,7 @@ pub async fn check_proxy_health(
                 match code {
                     0 => {
                         let result = json_result.get("result").unwrap();
-                        if result["area_limit"].as_i64().unwrap() != 0 {
+                        if result["area_limit"].as_i64().unwrap_or(1) != 0 {
                             Some(format!("Zone {area_num} -> Detect Proxy Area Not Suitable"))
                         } else {
                             None

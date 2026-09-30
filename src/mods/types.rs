@@ -2679,7 +2679,7 @@ impl EType {
                 format!("{{\"code\":{err_code},\"message\":\"其他上游错误: {err_msg}\"}}")
             }
             EType::UserLoginInvalid => String::from(
-                "{{\"code\":61000,\"message\":\"无效的用户态, 请尝试重新登陆Bilibili\"}}",
+                "{\"code\":61000,\"message\":\"无效的用户态, 请尝试重新登陆Bilibili\"}",
             ),
         }
     }

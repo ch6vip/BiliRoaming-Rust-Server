@@ -1,2 +1,8 @@
 /target
 Cargo.lock
+/config.json
+/config.yml
+/config.yaml
+
+# 本地运行时的占位首页 (可选文件, main.rs 的 / 路由会引用)
+/web

@@ -148,7 +148,10 @@ pub async fn async_postwebpage(
 }
 
 pub async fn redis_get(redis: &Pool, key: &str) -> Option<String> {
-    let mut conn = redis.get().await.unwrap();
+    let mut conn = match redis.get().await {
+        Ok(value) => value,
+        Err(_) => return None,
+    };
     let value: String = match cmd("GET").arg(key).query_async(&mut conn).await {
         Ok(value) => value,
         Err(_) => return None,
@@ -158,7 +161,10 @@ pub async fn redis_get(redis: &Pool, key: &str) -> Option<String> {
 
 pub async fn redis_set(redis: &Pool, key: &str, value: &str, expire_time: u64) -> Option<()> {
     // debug!("key:{} value:{}", key,value);
-    let mut conn = redis.get().await.unwrap();
+    let mut conn = match redis.get().await {
+        Ok(value) => value,
+        Err(_) => return None,
+    };
     if expire_time != 0 {
         match cmd("SETEX")
             .arg(&[key, &format!("{expire_time}"), value])

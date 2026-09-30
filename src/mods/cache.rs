@@ -386,7 +386,7 @@ pub async fn update_cached_playurl(
     let cache_type = CacheType::Playurl(params);
 
     let mut body_data_json: serde_json::Value = serde_json::from_str(body_data).unwrap();
-    let code = body_data_json["code"].as_i64().unwrap();
+    let code = body_data_json["code"].as_i64().unwrap_or(-2333);
 
     let playurl_type: PlayurlType;
     if params.is_th {
@@ -451,7 +451,7 @@ fn get_playurl_deadline(
                     match item["dash_video"]["base_url"].as_str() {
                         Some(value) => {
                             let query_string = if let Ok(value) = get_query_string(value) {
-                                value.replace(r#"\u0026"#, r#"\n"#)
+                                value.replace(r#"\u0026"#, "&")
                             } else {
                                 return Err(());
                             };
