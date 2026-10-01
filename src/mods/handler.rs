@@ -12,6 +12,7 @@ use super::upstream_res::{
     get_upstream_bili_subtitle,
 };
 use super::user_info::*;
+use super::types::UserInfo;
 use crate::{build_response, build_result_response, build_static_refusal_response, calc_md5};
 use actix_web::http::header::ContentType;
 use actix_web::{HttpRequest, HttpResponse};
@@ -186,19 +187,30 @@ pub async fn handle_playurl_request(req: &HttpRequest, is_app: bool, is_th: bool
     };
 
     // get user_info
-    let user_info = match get_user_info(
-        params.access_key,
-        params.appkey,
-        params.is_app,
-        &client_ak_type,
-        &bili_runtime,
-    )
-    .await
-    {
-        Ok(value) => value,
-        Err(value) => {
-            build_response!(value);
-        }
+    // th (intl gateway) 请求：上游自行鉴权令牌；主站 myinfo/黑名单/换签对国际令牌不适用
+    // （国际令牌打国内 myinfo 会 -101，曾把国际版用户全部拒之门外）
+    let (user_info, white) = if is_th {
+        (UserInfo::new(-999, params.access_key, 0, 0), true)
+    } else {
+        let user_info = match get_user_info(
+            params.access_key,
+            params.appkey,
+            params.is_app,
+            &client_ak_type,
+            &bili_runtime,
+        )
+        .await
+        {
+            Ok(value) => value,
+            Err(value) => {
+                build_response!(value);
+            }
+        };
+        let white = match get_blacklist_info(&user_info, &bili_runtime).await {
+            Ok(value) => value,
+            Err(value) => build_response!(value),
+        };
+        (user_info, white)
     };
 
     // get user's vip status
@@ -214,17 +226,19 @@ pub async fn handle_playurl_request(req: &HttpRequest, is_app: bool, is_th: bool
         Err(value) => build_response!(value),
     };
 
-    // resign if needed
+    // resign if needed（仅非 th：th 用户信息为 -999 桩，无换签）
     let resigned_access_key;
-    match resign_user_info(white, &mut params, &bili_runtime).await {
-        Ok(value) => {
-            if let Some(value) = value {
-                (params.is_vip, resigned_access_key) = (value.0, value.1);
-                debug!("[GET PLAYURL] IP {client_ip} | UID {} | AREA {} | EP {} -> Use Resigned UserInfo: AK {} isVIP {}" , user_info.uid, params.area.to_ascii_uppercase(), params.ep_id, "[redacted]", params.is_vip);
-                params.access_key = &resigned_access_key;
+    if !is_th {
+        match resign_user_info(white, &mut params, &bili_runtime).await {
+            Ok(value) => {
+                if let Some(value) = value {
+                    (params.is_vip, resigned_access_key) = (value.0, value.1);
+                    debug!("[GET PLAYURL] IP {client_ip} | UID {} | AREA {} | EP {} -> Use Resigned UserInfo: AK {} isVIP {}" , user_info.uid, params.area.to_ascii_uppercase(), params.ep_id, "[redacted]", params.is_vip);
+                    params.access_key = &resigned_access_key;
+                }
             }
+            Err(value) => build_response!(value),
         }
-        Err(value) => build_response!(value),
     }
 
     // get area cache
@@ -876,7 +890,12 @@ pub async fn errorurl_reg(url: &str) -> Option<u8> {
 
 // Note: 请求边界与凭据策略见 .agents/notes/implemented/bug-fix/2026-10-01-review-hardening.md
 pub fn valid_access_key(key: &str) -> bool {
-    key.len() == 32 && key.bytes().all(|b| b.is_ascii_hexdigit())
+    if key.len() == 32 && key.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return true;
+    }
+    // 国际版（com.bilibili.app.in）令牌：长字母数字串（实测 getAccessKey 返回 220 字符，
+    // 旧 32-hex 校验会把国际版用户全部拒为 -101"账号未登录"）
+    key.len() >= 40 && key.len() <= 256 && key.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 pub fn valid_query_sign(query: &str, secret: &str) -> bool {
     let Some((unsigned, sign)) = query.rsplit_once("&sign=") else {
