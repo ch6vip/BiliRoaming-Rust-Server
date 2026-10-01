@@ -2,6 +2,7 @@ use super::cache::{
     get_cached_ep_area, get_cached_playurl, get_cached_th_season, get_cached_th_subtitle,
 };
 use super::health::report_health;
+use super::rate_limit::client_ip;
 use super::types::{
     random_string, Area, BackgroundTaskType, BiliConfig, BiliRuntime, ClientType, EType,
     HealthData, HealthReportType, PlayurlParams, SearchParams,
@@ -11,12 +12,10 @@ use super::upstream_res::{
     get_upstream_bili_subtitle,
 };
 use super::user_info::*;
-use crate::{build_response, build_result_response, calc_md5};
+use crate::{build_response, build_result_response, build_static_refusal_response, calc_md5};
 use actix_web::http::header::ContentType;
 use actix_web::{HttpRequest, HttpResponse};
 use async_channel::Sender;
-use crypto::digest::Digest;
-use crypto::md5::Md5;
 use deadpool_redis::Pool;
 use log::{debug, error, warn};
 use pcre2::bytes::Regex;
@@ -38,10 +37,9 @@ pub async fn handle_playurl_request(req: &HttpRequest, is_app: bool, is_th: bool
         ..Default::default()
     };
     // detect client ip for log
-    let client_ip: String = match req.headers().get("X-Real-IP") {
-        Some(value) => value.to_str().unwrap().to_owned(),
-        None => format!("{:?}", req.peer_addr()),
-    };
+    let client_ip = client_ip(req, config)
+        .map(|ip| ip.to_string())
+        .unwrap_or_default();
 
     // detect req area
     (params.area, params.area_num) = match query.get("area") {
@@ -57,17 +55,17 @@ pub async fn handle_playurl_request(req: &HttpRequest, is_app: bool, is_th: bool
                 ("th", 4)
             } else {
                 // query param must have "area", or must be invalid req
-                build_response!(EType::InvalidReq);
+                build_static_refusal_response!(EType::InvalidReq.to_string());
             }
         }
     };
 
     // detect req UA
     params.user_agent = match req.headers().get("user-agent") {
-        Option::Some(ua) => ua.to_str().unwrap(),
+        Option::Some(ua) => ua.to_str().unwrap_or(""),
         _ => {
             warn!("[GET PLAYURL] IP {client_ip} -> Detect req without UA");
-            build_response!(EType::ReqUAError)
+            build_static_refusal_response!(EType::ReqUAError.to_string())
         }
     };
 
@@ -79,7 +77,7 @@ pub async fn handle_playurl_request(req: &HttpRequest, is_app: bool, is_th: bool
                 if version < config.limit_biliroaming_version_min
                     || version > config.limit_biliroaming_version_max
                 {
-                    build_response!(-412, "什么旧版本魔人,升下级");
+                    build_static_refusal_response!(-412, "什么旧版本魔人,升下级");
                 }
             }
             None => (),
@@ -115,29 +113,20 @@ pub async fn handle_playurl_request(req: &HttpRequest, is_app: bool, is_th: bool
         build_response!("-412", "未知设备");
     };
 
-    // verify req sign
-    // TODO: add ignore sign err
-    if is_app || is_th {
-        if query_string.len() <= 39
-            || ({
-                let mut raw_unsign_query_string = String::with_capacity(600);
-                raw_unsign_query_string.push_str(&query_string[..query_string.len() - 38]);
-                raw_unsign_query_string.push_str(params.appsec);
-                calc_md5!(&raw_unsign_query_string)
-            } != &query_string[query_string.len() - 32..])
-        {
-            build_response!(EType::ReqSignError);
-        }
+    if (is_app || is_th) && !valid_query_sign(query_string, params.appsec) {
+        build_static_refusal_response!(EType::ReqSignError.to_string());
     }
 
     // detect user's access_key
     params.access_key = match query.get("access_key") {
         Some(key) => {
-            if key.len() < 32 {
-                error!("[GET PLAYURL] IP {client_ip} -> Detect req with invalid access_key {key}");
+            if !valid_access_key(key) {
+                error!(
+                    "[GET PLAYURL] IP {client_ip} -> Detect req with invalid access_key [redacted]"
+                );
                 build_response!(EType::UserNotLoginedError);
             } else {
-                key.split_at(32).0
+                key
             }
         }
         _ => {
@@ -150,17 +139,22 @@ pub async fn handle_playurl_request(req: &HttpRequest, is_app: bool, is_th: bool
     params.ep_id = if let Some(value) = query.get("ep_id") {
         value
     } else {
-        build_response!(EType::InvalidReq)
+        build_static_refusal_response!(EType::InvalidReq.to_string())
     };
     params.cid = query.get("cid").unwrap_or("");
     params.bvid = query.get("bvid").unwrap_or("");
+    // detect content blocklist
+    if let Some(reason) = blocked_content(&query, config) {
+        warn!("[GET PLAYURL] IP {client_ip} -> Refused blocked content: {reason}");
+        build_response!(EType::ContentBlockedError);
+    }
 
     // detect client_type
     let client_type =
         if let Some(value) = ClientType::init(params.appkey, params.is_app, params.is_th, req) {
             value
         } else {
-            build_response!(EType::InvalidReq)
+            build_static_refusal_response!(EType::InvalidReq.to_string())
         };
     // detect other info
     params.build = query.get("build").unwrap_or("6800300");
@@ -226,14 +220,7 @@ pub async fn handle_playurl_request(req: &HttpRequest, is_app: bool, is_th: bool
         Ok(value) => {
             if let Some(value) = value {
                 (params.is_vip, resigned_access_key) = (value.0, value.1);
-                debug!(
-                    "[GET PLAYURL] IP {client_ip} | UID {} | AREA {} | EP {} -> Use Resigned UserInfo: AK {} isVIP {}",
-                    user_info.uid,
-                    params.area.to_ascii_uppercase(),
-                    params.ep_id,
-                    &resigned_access_key,
-                    params.is_vip
-                );
+                debug!("[GET PLAYURL] IP {client_ip} | UID {} | AREA {} | EP {} -> Use Resigned UserInfo: AK {} isVIP {}" , user_info.uid, params.area.to_ascii_uppercase(), params.ep_id, "[redacted]", params.is_vip);
                 params.access_key = &resigned_access_key;
             }
         }
@@ -243,27 +230,18 @@ pub async fn handle_playurl_request(req: &HttpRequest, is_app: bool, is_th: bool
     // get area cache
     if config.area_cache_open && params.ep_id != "" {
         match get_cached_ep_area(&params, &bili_runtime).await {
-            Ok(value) => match value {
-                Some(area) => {
-                    debug!(
-                        "[GET PLAYURL] IP {client_ip} | UID {} | AREA {} | EP {} -> Use Cached Area: AREA_NUM {}",
-                        user_info.uid,
-                        params.area.to_ascii_uppercase(),
-                        params.ep_id,
-                        area.num()
-                    );
-                    params.area_num = area.num();
-                    params.init_params(area);
+            Ok(value) => {
+                match value {
+                    Some(area) => {
+                        debug!("[GET PLAYURL] IP {client_ip} | UID {} | AREA {} | EP {} -> Use Cached Area: AREA_NUM {}" , user_info.uid, params.area.to_ascii_uppercase(), params.ep_id, area.num());
+                        params.area_num = area.num();
+                        params.init_params(area);
+                    }
+                    None => {
+                        debug!("[GET PLAYURL] IP {client_ip} | UID {} | AREA {} | EP {} -> No Cached Area" , user_info.uid, params.area.to_ascii_uppercase(), params.ep_id);
+                    }
                 }
-                None => {
-                    debug!(
-                        "[GET PLAYURL] IP {client_ip} | UID {} | AREA {} | EP {} -> No Cached Area",
-                        user_info.uid,
-                        params.area.to_ascii_uppercase(),
-                        params.ep_id,
-                    );
-                }
-            },
+            }
             Err(value) => build_response!(value),
         }
     }
@@ -303,10 +281,9 @@ pub async fn handle_search_request(req: &HttpRequest, is_app: bool, is_th: bool)
         ..Default::default()
     };
     // detect client ip for log
-    let client_ip: String = match req.headers().get("X-Real-IP") {
-        Some(value) => value.to_str().unwrap().to_owned(),
-        None => format!("{:?}", req.peer_addr()),
-    };
+    let client_ip = client_ip(req, config)
+        .map(|ip| ip.to_string())
+        .unwrap_or_default();
 
     // detect req area
     (params.area, params.area_num) = match query.get("area") {
@@ -322,17 +299,21 @@ pub async fn handle_search_request(req: &HttpRequest, is_app: bool, is_th: bool)
                 ("th", 4)
             } else {
                 // query param must have "area", or must be invalid req
-                build_response!(EType::InvalidReq);
+                build_static_refusal_response!(EType::InvalidReq.to_string());
             }
         }
     };
 
     // detect req UA
     params.user_agent = match req.headers().get("user-agent") {
-        Option::Some(_ua) => req.headers().get("user-agent").unwrap().to_str().unwrap(),
+        Option::Some(_ua) => req
+            .headers()
+            .get("user-agent")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or(""),
         _ => {
             warn!("[GET SEARCH] IP {client_ip} | Detect req without UA");
-            build_response!(EType::ReqUAError)
+            build_static_refusal_response!(EType::ReqUAError.to_string())
         }
     };
 
@@ -344,7 +325,7 @@ pub async fn handle_search_request(req: &HttpRequest, is_app: bool, is_th: bool)
                 if version < config.limit_biliroaming_version_min
                     || version > config.limit_biliroaming_version_max
                 {
-                    build_response!(-412, "什么旧版本魔人,升下级");
+                    build_static_refusal_response!(-412, "什么旧版本魔人,升下级");
                 }
             }
             None => (),
@@ -356,7 +337,7 @@ pub async fn handle_search_request(req: &HttpRequest, is_app: bool, is_th: bool)
         if let Some(value) = ClientType::init(params.appkey, params.is_app, params.is_th, req) {
             value
         } else {
-            build_response!(EType::InvalidReq)
+            build_static_refusal_response!(EType::InvalidReq.to_string())
         };
 
     // detect user's appkey
@@ -391,29 +372,20 @@ pub async fn handle_search_request(req: &HttpRequest, is_app: bool, is_th: bool)
     // 哔哩哔哩国际版客户端发的请求中的appkey是国内版的（不换会导致-663）
     params.appkey = client_type.appkey();
 
-    // verify req sign
-    // TODO: add ignore sign err
-    if is_app && !is_th {
-        let mut raw_unsign_query_string = String::with_capacity(600);
-        raw_unsign_query_string.push_str(&query_string[..query_string.len() - 38]);
-        raw_unsign_query_string.push_str(params.appsec);
-        let mut new_md5 = Md5::new();
-        new_md5.input_str(&raw_unsign_query_string);
-        if query_string.len() <= 39
-            || (new_md5.result_str() != &query_string[query_string.len() - 32..])
-        {
-            build_response!(EType::ReqSignError);
-        }
+    if is_app && !is_th && !valid_query_sign(query_string, params.appsec) {
+        build_static_refusal_response!(EType::ReqSignError.to_string());
     }
 
     // detect user's access_key
     params.access_key = match query.get("access_key") {
         Some(key) => {
-            if key.len() < 32 {
-                error!("[GET SEARCH] IP {client_ip} -> Detect req with invalid access_key {key}");
+            if !valid_access_key(key) {
+                error!(
+                    "[GET SEARCH] IP {client_ip} -> Detect req with invalid access_key [redacted]"
+                );
                 build_response!(EType::UserNotLoginedError);
             } else {
-                key.split_at(32).0
+                key
             }
         }
         _ => {
@@ -506,9 +478,9 @@ pub async fn handle_search_request(req: &HttpRequest, is_app: bool, is_th: bool)
     };
 
     let host = match req.headers().get("Host") {
-        Some(host) => host.to_str().unwrap(),
+        Some(host) => host.to_str().unwrap_or(""),
         _ => match req.headers().get("authority") {
-            Some(host) => host.to_str().unwrap(),
+            Some(host) => host.to_str().unwrap_or(""),
             _ => "",
         },
     };
@@ -533,26 +505,25 @@ pub async fn handle_search_request(req: &HttpRequest, is_app: bool, is_th: bool)
             Err(value) => build_response!(value),
         };
 
-    let search_remake_date = {
-        if is_app {
-            if let Some(value) = config.appsearch_remake.get(host) {
-                value
-            } else {
-                build_response!(body_data_json);
-            }
-        } else {
-            if let Some(value) = config.websearch_remake.get(host) {
-                value
-            } else {
-                build_response!(body_data_json);
-            }
+    // A malformed `appsearch_remake` / `websearch_remake` entry must not take down the
+    // worker: previously this was `serde_json::from_str(..).unwrap()`, so one bad config
+    // string panicked the request thread. Fall back to the untouched upstream response.
+    let search_remake_date = match parse_search_remake(config, is_app, host) {
+        Ok(Some(value)) => value,
+        Ok(None) => build_response!(body_data_json),
+        Err(error) => {
+            error!(
+                "[GET SEARCH] IP {client_ip} | UID {uid} | AREA {} | {error} -> skip remake",
+                params.area.to_ascii_uppercase(),
+            );
+            build_response!(body_data_json)
         }
     };
 
     if is_app {
         match body_data_json["data"]["items"].as_array_mut() {
             Some(value2) => {
-                value2.insert(0, serde_json::from_str(&search_remake_date).unwrap());
+                value2.insert(0, search_remake_date);
             }
             None => {
                 body_data_json["data"]["items"] = json!([]);
@@ -560,20 +531,20 @@ pub async fn handle_search_request(req: &HttpRequest, is_app: bool, is_th: bool)
                 body_data_json["data"]["items"]
                     .as_array_mut()
                     .unwrap()
-                    .insert(0, serde_json::from_str(&search_remake_date).unwrap());
+                    .insert(0, search_remake_date);
             }
         }
     } else {
         match body_data_json["data"]["result"].as_array_mut() {
             Some(value2) => {
-                value2.insert(0, serde_json::from_str(&search_remake_date).unwrap());
+                value2.insert(0, search_remake_date);
             }
             None => {
                 body_data_json["data"]["result"] = json!([]);
                 body_data_json["data"]["result"]
                     .as_array_mut()
                     .unwrap()
-                    .insert(0, serde_json::from_str(&search_remake_date).unwrap());
+                    .insert(0, search_remake_date);
             }
         }
     }
@@ -598,28 +569,33 @@ pub async fn handle_th_season_request(
         ..Default::default()
     };
     // detect client ip for log
-    let client_ip: String = match req.headers().get("X-Real-IP") {
-        Some(value) => value.to_str().unwrap().to_owned(),
-        None => format!("{:?}", req.peer_addr()),
-    };
+    let client_ip = client_ip(req, config)
+        .map(|ip| ip.to_string())
+        .unwrap_or_default();
 
     // detect req UA
     params.user_agent = match req.headers().get("user-agent") {
-        Option::Some(_ua) => req.headers().get("user-agent").unwrap().to_str().unwrap(),
+        Option::Some(_ua) => req
+            .headers()
+            .get("user-agent")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or(""),
         _ => {
             warn!("[GET TH_SEASON] IP {client_ip} | Detect req without UA");
-            build_response!(EType::ReqUAError)
+            build_static_refusal_response!(EType::ReqUAError.to_string())
         }
     };
 
     // detect user's access_key
     params.access_key = match query.get("access_key") {
         Some(key) => {
-            if key.len() < 32 {
-                error!("[GET TH SEASON] IP {client_ip} -> Detect req with invalid access_key {key}");
+            if !valid_access_key(key) {
+                error!(
+                    "[GET TH SEASON] IP {client_ip} -> Detect req with invalid access_key [redacted]"
+                );
                 build_response!(EType::UserNotLoginedError);
             } else {
-                key.split_at(32).0
+                key
             }
         }
         _ => {
@@ -655,7 +631,7 @@ pub async fn handle_th_season_request(
         value
     } else {
         // zone th req must have season_id, ep_id is not supported
-        build_response!(-10403, "参数错误");
+        build_static_refusal_response!(-10403, "参数错误");
     };
 
     params.build = query.get("build").unwrap_or("1080003");
@@ -689,17 +665,20 @@ pub async fn handle_th_subtitle_request(req: &HttpRequest, _: bool, _: bool) -> 
     };
     params.init_params(Area::Th);
     // detect client ip for log
-    let client_ip: String = match req.headers().get("X-Real-IP") {
-        Some(value) => value.to_str().unwrap().to_owned(),
-        None => format!("{:?}", req.peer_addr()),
-    };
+    let client_ip = client_ip(req, config)
+        .map(|ip| ip.to_string())
+        .unwrap_or_default();
 
     // detect req UA
     params.user_agent = match req.headers().get("user-agent") {
-        Option::Some(_ua) => req.headers().get("user-agent").unwrap().to_str().unwrap(),
+        Option::Some(_ua) => req
+            .headers()
+            .get("user-agent")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or(""),
         _ => {
             warn!("[GET TH_SUBTITLE] IP {client_ip} | Detect req without UA");
-            build_response!(EType::ReqUAError)
+            build_static_refusal_response!(EType::ReqUAError.to_string())
         }
     };
     // detect req ep
@@ -738,24 +717,28 @@ pub async fn handle_api_access_key_request(req: &HttpRequest) -> HttpResponse {
     let bili_runtime = BiliRuntime::new(config, redis_pool, bilisender);
     let query_string = req.query_string();
     let query = QString::from(query_string);
-    // detect client ip for log
-    // let client_ip: String = match req.headers().get("X-Real-IP") {
-    //     Some(value) => value.to_str().unwrap().to_owned(),
-    //     None => format!("{:?}", req.peer_addr()),
-    // };
-
-    let area_num: u8 = match query.get("area_num") {
-        Some(key) => match key.parse() {
-            Ok(value) => value,
-            Err(_) => {
-                build_response!(-10403, "参数错误: area_num非法");
-            }
-        },
-        _ => {
-            // query param must have "area", or must be invalid req
-            build_response!(-10403, "参数错误: area_num为空");
+    let area_num = match query
+        .get("area_num")
+        .and_then(|value| value.parse::<u8>().ok())
+    {
+        Some(value) => value,
+        None => {
+            build_static_refusal_response!(-10403, "参数错误: area_num非法");
         }
     };
+
+    if !(1..=4).contains(&area_num)
+        || !config
+            .api_assesskey_open
+            .get(&area_num.to_string())
+            .copied()
+            .unwrap_or(false)
+    {
+        build_response!(-404, "凭据接口未开放");
+    }
+    if config.api_sign.trim().is_empty() {
+        build_response!(-412, "凭据接口未配置签名");
+    }
 
     match query.get("sign") {
         Option::Some(key) => {
@@ -777,9 +760,60 @@ pub async fn handle_api_access_key_request(req: &HttpRequest) -> HttpResponse {
             build_response!(-404, "获取AK失败");
         };
 
-    build_response!(format!(
-        r#"{{"code":0,"message":"","access_key":"{access_key}","expire_time":{expire_time}}}"#
-    ))
+    HttpResponse::Ok()
+        .insert_header(("Cache-Control", "no-store"))
+        .json(
+            json!({"code": 0, "message": "", "access_key": access_key, "expire_time": expire_time}),
+        )
+}
+
+/// Refuse requests for explicitly blocked content before any upstream call.
+/// Returns a short reason string for logging when a parameter matches a blocklist.
+/// Non-numeric ids never match the numeric lists, so malformed input is simply ignored.
+pub fn blocked_content(query: &QString, config: &BiliConfig) -> Option<String> {
+    let parse = |value: Option<&str>| -> Option<u64> { value?.parse::<u64>().ok() };
+    if let Some(ep) = parse(query.get("ep_id")) {
+        if config.block_bangumi_ep.contains(&ep) {
+            return Some(format!("ep_id={ep}"));
+        }
+    }
+    if let Some(cid) = parse(query.get("cid")) {
+        if config.block_bangumi_cid.contains(&cid) {
+            return Some(format!("cid={cid}"));
+        }
+    }
+    if let Some(avid) = parse(query.get("avid")) {
+        if config.block_bangumi_avid.contains(&avid) {
+            return Some(format!("avid={avid}"));
+        }
+    }
+    if let Some(bvid) = query.get("bvid") {
+        if !bvid.is_empty() && config.block_bangumi_bvid.iter().any(|item| item == bvid) {
+            return Some(format!("bvid={bvid}"));
+        }
+    }
+    None
+}
+
+/// Resolve the configured search-remake entry for a host.
+/// `Ok(None)` means no entry is configured; `Err` reports a malformed entry so the caller
+/// can log it and fall back to the untouched upstream response instead of panicking.
+pub fn parse_search_remake(
+    config: &BiliConfig,
+    is_app: bool,
+    host: &str,
+) -> Result<Option<serde_json::Value>, String> {
+    let (name, entry) = if is_app {
+        ("appsearch_remake", config.appsearch_remake.get(host))
+    } else {
+        ("websearch_remake", config.websearch_remake.get(host))
+    };
+    match entry {
+        Some(raw) => serde_json::from_str::<serde_json::Value>(raw)
+            .map(Some)
+            .map_err(|error| format!("invalid {name} entry for host {host}: {error}")),
+        None => Ok(None),
+    }
 }
 
 use lazy_static::lazy_static;
@@ -839,3 +873,21 @@ pub async fn errorurl_reg(url: &str) -> Option<u8> {
 //         .insert_header(("Access-Control-Allow-Methods", "GET"))
 //         .body(message);
 // }
+
+// Note: 请求边界与凭据策略见 .agents/notes/implemented/bug-fix/2026-10-01-review-hardening.md
+pub fn valid_access_key(key: &str) -> bool {
+    key.len() == 32 && key.bytes().all(|b| b.is_ascii_hexdigit())
+}
+pub fn valid_query_sign(query: &str, secret: &str) -> bool {
+    let Some((unsigned, sign)) = query.rsplit_once("&sign=") else {
+        return false;
+    };
+    if !query.is_ascii()
+        || unsigned.is_empty()
+        || !valid_access_key(sign)
+        || unsigned.split('&').any(|part| part.starts_with("sign="))
+    {
+        return false;
+    }
+    calc_md5!(format!("{unsigned}{secret}")) == sign
+}

@@ -47,7 +47,7 @@ pub async fn get_ep_need_vip(ep_id: &str, bili_runtime: &BiliRuntime<'_>) -> Opt
 pub async fn get_ep_area_limit(ep_id: &str, area: Area, bili_runtime: &BiliRuntime<'_>) -> bool {
     let data_raw = bili_runtime.get_cache(&CacheType::EpArea(ep_id)).await;
     let mut ep_area_data: [u8; 4] = [2, 2, 2, 2];
-    if let Some(value) = data_raw {
+    if let Some(value) = data_raw.filter(|v| super::cache::valid_area_cache(v)) {
         for (index, char) in value.char_indices() {
             match char {
                 '0' => {

@@ -34,7 +34,9 @@ fn area_new_panics_on_invalid_num() {
 #[test]
 fn check_ep_available_known_codes() {
     // 正常
-    assert!(check_ep_available(&json!({"code": 0, "message": "success"})));
+    assert!(check_ep_available(
+        &json!({"code": 0, "message": "success"})
+    ));
     // 大会员专享限制 -> 视为可用（内容存在，只是要会员）
     assert!(check_ep_available(
         &json!({"code": -10403, "message": "大会员专享限制"})
@@ -58,7 +60,9 @@ fn check_ep_available_unavailable_cases() {
         &json!({"code": -10403, "message": "抱歉您所在地区不可观看！"})
     ));
     // -404 -> 不可用
-    assert!(!check_ep_available(&json!({"code": -404, "message": "啥都木有"})));
+    assert!(!check_ep_available(
+        &json!({"code": -404, "message": "啥都木有"})
+    ));
     // 未知码 -> 不可用
     assert!(!check_ep_available(&json!({"code": 999, "message": "?"})));
     // 字段缺失不应 panic（回归保护：此前的 unwrap 加固）
@@ -82,6 +86,7 @@ fn aurora_eid_roundtrip_for_typical_mids() {
     }
 }
 
+#[test]
 fn eid_to_mid_rejects_garbage() {
     // 非 base64 / 非法输入不应 panic，只返回 Err
     assert!(eid_to_mid("!!!not-base64!!!").is_err());

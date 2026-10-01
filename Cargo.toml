@@ -5,10 +5,10 @@ edition = "2021"
 
 [dependencies]
 chrono = "0.4.23"
-actix-web = {version = "4.2.1", features = ["rustls","compress-brotli","compress-gzip","compress-zstd"]}
+actix-web = {version = "4.15.0", features = ["rustls-0_23","compress-brotli","compress-gzip","compress-zstd"]}
 actix-files = "0.6.2"
 qstring = "0.7.2"
-rust-crypto = "0.2.36"
+md5 = "0.8.1"
 serde_json = "1.0.89"
 serde_yaml = "0.9.14"
 serde = {version = "1.0.147",features = ["derive"]}
@@ -20,15 +20,15 @@ tokio = { version = "1.22.0", features = ["full"] }
 pcre2 = "0.2.3"
 ctrlc = "3.2.3"
 rand = "0.8.5"
-actix-governor = "0.4.0-beta.3"
+actix-governor = "0.10.0"
 base64 = "0.21.0"
 urlencoding = "2.1.2"
 lazy_static = "1.4.0"
 log = "0.4"
 env_logger = "0.10.0"
-reqwest = {version = "0.11.14",features = ["socks","brotli","gzip","deflate","rustls-tls"]}
-rustls = "0.20.8"
-rustls-pemfile = "1.0.2"
+reqwest = {version = "0.12", default-features = false, features = ["socks","brotli","gzip","deflate","rustls-tls","http2"]}
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pki-types = { version = "1.15.1", features = ["std"] }
 
 [profile.fast]
 inherits = "release"
@@ -42,3 +42,10 @@ panic = 'unwind'
 incremental = false 
 codegen-units = 1 
 rpath = false
+
+[patch.crates-io]
+h2 = { path = "vendor/h2" }
+
+[dev-dependencies]
+h2_legacy = { package = "h2", version = "0.3.27" }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem", "crypto"] }

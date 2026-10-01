@@ -10,7 +10,7 @@ use super::types::{
 };
 use super::upstream_res::*;
 use chrono::Local;
-use log::{debug, error, info, trace};
+use log::{debug, error, trace};
 use serde_json::json;
 
 /*
@@ -27,8 +27,12 @@ pub async fn update_cached_playurl_background(
         params.ep_id
     );
     // 虽然看起来很114514, 懒得改了, 能用就行
-    let background_task_data =
-        BackgroundTaskType::Cache(CacheTask::PlayurlCacheRefresh(PlayurlParamsStatic {
+    let key = CacheType::Playurl(params).gen_key().remove(0);
+    let Some(guard) = RefreshGuard::acquire(key) else {
+        return;
+    };
+    let background_task_data = BackgroundTaskType::Cache(CacheTask::PlayurlCacheRefresh(
+        PlayurlParamsStatic {
             access_key: params.access_key.to_string(),
             appkey: params.appkey.to_string(),
             appsec: params.appsec.to_string(),
@@ -49,7 +53,9 @@ pub async fn update_cached_playurl_background(
             user_agent: params.user_agent.to_string(),
             bvid: params.bvid.to_string(),
             session: params.session.to_string(),
-        }));
+        },
+        guard,
+    ));
     bili_runtime.send_task(background_task_data).await
 }
 
@@ -74,7 +80,7 @@ pub async fn update_cached_user_info_background(
     access_key: String,
     bili_runtime: &BiliRuntime<'_>,
 ) {
-    trace!("[BACKGROUND TASK] AK {access_key} -> Accept UserInfo Cache Refresh Task...");
+    trace!("[BACKGROUND TASK] AK [redacted] -> Accept UserInfo Cache Refresh Task...");
     let background_task_data =
         BackgroundTaskType::Cache(CacheTask::UserInfoCacheRefresh(access_key));
     bili_runtime.send_task(background_task_data).await
@@ -282,7 +288,7 @@ pub async fn background_task_run(
                 update_user_info_cache(&new_user_info, bili_runtime).await;
                 Ok(())
             }
-            CacheTask::PlayurlCacheRefresh(params) => {
+            CacheTask::PlayurlCacheRefresh(params, _guard) => {
                 match get_upstream_bili_playurl_background(&mut params.as_ref(), bili_runtime).await
                 {
                     Ok(body_data) => {
@@ -361,43 +367,90 @@ pub async fn background_task_run(
                                 let code = json_result["code"]
                                     .as_i64()
                                     .unwrap_or(-2333);
-                                match code {
-                                    0 => {
-                                        let result = json_result.get("result").unwrap();
-                                        if result["area_limit"].as_i64().unwrap_or(1) != 0 {
-                                            ep_area_data[(area_num - 1) as usize] = "1";
-                                        } else {
-                                            ep_area_data[3 as usize] = "1";
-                                            ep_area_data[(area_num - 1) as usize] = "0";
-                                        }
+                                match status_area_availability(&json_result) {
+                                    Some(true) => {
+                                        ep_area_data[(area_num - 1) as usize] = "0";
+                                        ep_area_data[3] = "1";
                                     }
-                                    -404 => {
-                                        // 东南亚区贼恶心...
-                                        info!("[BACKGROUND TASK] EP {ep_id} | PROXY_OPEN {proxy_open} | PROXY_URL {proxy_url} -> Check EP available zone -404: maybe zone th");
-                                        ep_area_data[(area_num - 1) as usize] = "1";
-                                        ep_area_data[3 as usize] = "0";
-                                    }
-                                    -2333 => {
-                                        error!("[BACKGROUND TASK] EP {ep_id} | PROXY_OPEN {proxy_open} | PROXY_URL {proxy_url} -> Check EP available zone failed: Json Parsing Error: {value}");
-                                        continue;
-                                    }
-                                    _ => {
-                                        ep_area_data[(area_num - 1) as usize] = "1";
-                                        error!("[BACKGROUND TASK] EP {ep_id} | PROXY_OPEN {proxy_open} | PROXY_URL {proxy_url} -> Check EP available zone failed: Unknown Error Code {code}: {value}");
-                                        continue;
-                                    }
+                                    Some(false) => ep_area_data[(area_num - 1) as usize] = "1",
+                                    None => log::warn!("Area probe returned an inconclusive response (code {code})"),
                                 }
+
                             }
-                            Err(_) => error!("[BACKGROUND TASK] EP {ep_id} | PROXY_OPEN {proxy_open} | PROXY_URL {proxy_url} -> Check EP available zone failed: Network Error"),
+                            Err(_) => error!("[BACKGROUND TASK] EP {ep_id} | PROXY_OPEN {proxy_open} | PROXY_URL [redacted] -> Check EP available zone failed: Network Error"),
                         }
                 }
                 let ep_area_data = ep_area_data.concat();
                 debug!("[BACKGROUND TASK] EP {ep_id} | Check EP available zone finished: {ep_area_data}");
                 bili_runtime
-                    .update_cache(&CacheType::EpArea(&ep_id), &ep_area_data, 0)
+                    .update_cache(&CacheType::EpArea(&ep_id), &ep_area_data, 3600)
                     .await;
                 Ok(())
             }
         },
+    }
+}
+
+// One refresh per cache key, including queued work. RAII releases on rejection, panic or cancellation.
+lazy_static::lazy_static! {
+    static ref PENDING_REFRESHES: std::sync::Mutex<std::collections::HashSet<String>> = Default::default();
+}
+pub struct RefreshGuard {
+    key: String,
+}
+impl RefreshGuard {
+    pub fn acquire(key: String) -> Option<Self> {
+        let mut pending = PENDING_REFRESHES.lock().unwrap_or_else(|e| e.into_inner());
+        if !pending.insert(key.clone()) {
+            return None;
+        }
+        Some(Self { key })
+    }
+}
+impl Drop for RefreshGuard {
+    fn drop(&mut self) {
+        PENDING_REFRESHES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.key);
+    }
+}
+
+/// Await a slot before receiving more work; a task panic cannot stop the dispatcher.
+pub async fn run_background_queue<F, Fut>(
+    receiver: &async_channel::Receiver<BackgroundTaskType>,
+    run: F,
+) where
+    F: Fn(BackgroundTaskType) -> Fut,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    let mut running = tokio::task::JoinSet::new();
+    loop {
+        if running.len() >= 8 {
+            if let Some(Err(error)) = running.join_next().await {
+                log::error!("Background task failed: {error}");
+            }
+        }
+        match receiver.recv().await {
+            Ok(task) => {
+                running.spawn(run(task));
+            }
+            Err(_) => break,
+        }
+    }
+    while let Some(result) = running.join_next().await {
+        if let Err(error) = result {
+            log::error!("Background task failed: {error}");
+        }
+    }
+}
+
+pub fn status_area_availability(data: &serde_json::Value) -> Option<bool> {
+    if data["code"].as_i64()? == 0 {
+        data["result"]["area_limit"]
+            .as_u64()
+            .map(|limit| limit == 0)
+    } else {
+        super::cache::ep_availability(data)
     }
 }

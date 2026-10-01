@@ -618,4 +618,3 @@ pub fn spawn_random_accesskey(len: usize) -> String {
     }
     secret
 }
-

@@ -1,0 +1,8 @@
+{
+  "advisories": [
+    "RUSTSEC-2026-0258",
+    "GHSA-q83h-524g-xf6h"
+  ],
+  "upstream_commit": "193833e87c639e39751f339a9c375a44c8bfab54",
+  "source_sha256": "0d9eaeaa9b29c1d802f8bfa167a1e03a3e16323c223065918536a558f258ccd8"
+}

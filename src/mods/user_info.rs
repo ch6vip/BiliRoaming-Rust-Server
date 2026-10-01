@@ -20,9 +20,9 @@ pub async fn get_user_info(
             debug!(
                 "[GET USER_INFO] UID {} | AK {} | U.VIP {} -> Got AK {}'s user info from cache",
                 cached_user_info.uid,
-                cached_user_info.access_key,
+                "[redacted]",
                 cached_user_info.is_vip(),
-                access_key
+                "[redacted]"
             );
             match cached_user_info.code {
                 0 | -999 => Ok(cached_user_info),
@@ -36,22 +36,10 @@ pub async fn get_user_info(
             }
         }
         None => {
-            match get_upstream_bili_account_info_rec(
-                access_key,
-                client_type,
-                bili_runtime,
-                0,
-            )
-            .await
+            match get_upstream_bili_account_info_rec(access_key, client_type, bili_runtime, 0).await
             {
                 Ok(value) => {
-                    debug!(
-                    "[GET USER_INFO] UID {} | AK {} | U.VIP {} -> Got AK {}'s user info from upstream",
-                    value.uid,
-                    value.access_key,
-                    value.is_vip(),
-                    access_key
-                );
+                    debug!("[GET USER_INFO] UID {} | AK {} | U.VIP {} -> Got AK {}'s user info from upstream" , "[redacted]", "[redacted]", "[redacted]", "[redacted]");
                     Ok(value)
                 }
                 Err(value) => Err(value),
@@ -65,13 +53,6 @@ pub async fn get_blacklist_info(
     user_info: &UserInfo,
     bili_runtime: &BiliRuntime<'_>,
 ) -> Result<bool, EType> {
-    fn timestamp_to_time(timestamp: &u64) -> String {
-        let dt = Utc
-            .timestamp_opt(*timestamp as i64, 0)
-            .unwrap()
-            .with_timezone(&FixedOffset::east_opt(8 * 3600).unwrap());
-        dt.format(r#"%Y年%m月%d日 %H:%M解封"#).to_string()
-    }
     // let uid = &user_info.uid;
     // let access_key = &user_info.access_key;
     match &bili_runtime.config.blacklist_config {
@@ -85,20 +66,20 @@ pub async fn get_blacklist_info(
                     if value.1 {
                         info!(
                             "[GET USER_CER_INFO] UID {} | AK {} -> 本地白名单内",
-                            user_info.uid, user_info.access_key
+                            user_info.uid, "[redacted]"
                         );
                         return Ok(true);
                     } else if value.0 {
                         info!(
                             "[GET USER_CER_INFO] UID {} | AK {} -> 本地黑名单, 滚",
-                            user_info.uid, user_info.access_key
+                            user_info.uid, "[redacted]"
                         );
                         return Err(EType::UserBlacklistedError(0));
                     }
                     {
                         debug!(
                             "[GET USER_CER_INFO] UID {} | AK {} -> 本地验证通过",
-                            user_info.uid, user_info.access_key
+                            user_info.uid, "[redacted]"
                         );
                         Ok(false)
                     }
@@ -106,7 +87,7 @@ pub async fn get_blacklist_info(
                 None => {
                     info!(
                         "[GET USER_CER_INFO] UID {} | AK {} -> 不在本地白名单, 拦截之",
-                        user_info.uid, user_info.access_key
+                        user_info.uid, "[redacted]"
                     );
                     Err(EType::UserWhitelistedError)
                 }
@@ -122,20 +103,20 @@ pub async fn get_blacklist_info(
                     if value.1 {
                         info!(
                             "[GET USER_CER_INFO] UID {} | AK {} -> 本地白名单内",
-                            user_info.uid, user_info.access_key
+                            user_info.uid, "[redacted]"
                         );
                         return Ok(true);
                     } else if value.0 {
                         info!(
                             "[GET USER_CER_INFO] UID {} | AK {} -> 本地黑名单, 滚",
-                            user_info.uid, user_info.access_key
+                            user_info.uid, "[redacted]"
                         );
                         return Err(EType::UserBlacklistedError(0));
                     }
                     {
                         debug!(
                             "[GET USER_CER_INFO] UID {} | AK {} -> 本地验证通过",
-                            user_info.uid, user_info.access_key
+                            user_info.uid, "[redacted]"
                         );
                         Ok(false)
                     }
@@ -180,13 +161,13 @@ pub async fn get_blacklist_info(
                     if value.1 {
                         info!(
                             "[GET USER_CER_INFO] UID {} | AK {} -> 本地白名单内",
-                            user_info.uid, user_info.access_key
+                            user_info.uid, "[redacted]"
                         );
                         return Ok(true);
                     } else if value.0 {
                         info!(
                             "[GET USER_CER_INFO] UID {} | AK {} -> 本地黑名单, 滚",
-                            user_info.uid, user_info.access_key
+                            user_info.uid, "[redacted]"
                         );
                         return Err(EType::UserBlacklistedError(0));
                     } else {
@@ -216,21 +197,19 @@ pub async fn get_blacklist_info(
             if data.white {
                 info!(
                     "[GET USER_CER_INFO] UID {} | AK {} -> 在线白名单, 下次刷新: {}",
-                    user_info.uid, user_info.access_key, data.status_expire_time
+                    user_info.uid, "[redacted]", data.status_expire_time
                 );
                 Ok(true)
             } else if data.black {
                 info!(
                     "[GET USER_CER_INFO] UID {} | AK {} -> 在线黑名单, {}",
-                    user_info.uid,
-                    user_info.access_key,
-                    timestamp_to_time(&data.ban_until)
+                    user_info.uid, "[redacted]", data.ban_until
                 );
                 Err(EType::UserBlacklistedError(data.ban_until as i64))
             } else {
                 debug!(
                     "[GET USER_CER_INFO] UID {} | AK {} -> 非黑白名单用户",
-                    user_info.uid, user_info.access_key
+                    user_info.uid, "[redacted]"
                 );
                 Ok(false)
             }
@@ -278,9 +257,10 @@ pub async fn resign_user_info(
                     .get(&params.area_num.to_string())
                     .unwrap_or(&false))
         {
-            (new_access_key, _) = get_resigned_access_key(&1, &params.user_agent, bili_runtime)
-                .await
-                .unwrap_or((params.access_key.to_string(), 1));
+            (new_access_key, _) =
+                get_resigned_access_key(&params.area_num, &params.user_agent, bili_runtime)
+                    .await
+                    .unwrap_or((params.access_key.to_string(), 1));
 
             let resign_user_info = match get_user_info(
                 &new_access_key,
@@ -325,9 +305,11 @@ pub async fn get_resigned_access_key(
         let ts = dt.timestamp() as u64;
         match bili_runtime.redis_get(&key).await {
             Some(value) => {
-                let resign_info_json = UserResignInfo::new(&value);
-                if resign_info_json.expire_time > ts {
-                    return Some((resign_info_json.access_key, resign_info_json.expire_time));
+                let resign_info_json = serde_json::from_str::<UserResignInfo>(&value).ok();
+                if let Some(resign_info_json) = resign_info_json {
+                    if resign_info_json.expire_time > ts {
+                        return Some((resign_info_json.access_key, resign_info_json.expire_time));
+                    }
                 }
             }
             None => (),
@@ -335,9 +317,9 @@ pub async fn get_resigned_access_key(
         let area_num_str = area_num.to_string();
         let url = format!(
             "{}?area_num={}&sign={}",
-            &config.resign_api.get(&area_num_str).unwrap(),
+            &config.resign_api.get(&area_num_str)?,
             &area_num,
-            &config.resign_api_sign.get(&area_num_str).unwrap()
+            &config.resign_api_sign.get(&area_num_str)?
         );
         let upstream_raw_resp =
             if let Ok(data) = async_getwebpage(&url, false, "", user_agent, "", None).await {
@@ -350,17 +332,14 @@ pub async fn get_resigned_access_key(
             if let Some(value) = upstream_raw_resp.json() {
                 value
             } else {
-                error!("[GET RESIGN] json解析失败: {}", upstream_raw_resp);
+                error!("[GET RESIGN] json解析失败: {}", "[redacted]");
                 return None;
             };
         if upstream_raw_resp_json["code"].as_i64().unwrap_or(-2333) != 0 {
             error!("[GET RESIGN] err3");
             return None;
         }
-        let access_key = upstream_raw_resp_json["access_key"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let access_key = upstream_raw_resp_json["access_key"].as_str()?.to_string();
         let resign_info = UserResignInfo {
             // area_num: *area_num as i32,
             access_key: access_key.clone(),
@@ -391,7 +370,7 @@ pub async fn get_resigned_access_key(
                 Some(value) => value,
                 None => return None,
             };
-            let resign_info_json: UserResignInfo = serde_json::from_str(&resign_info_str).unwrap();
+            let resign_info_json: UserResignInfo = serde_json::from_str(&resign_info_str).ok()?;
             let dt = Local::now();
             let ts = dt.timestamp() as u64;
             if resign_info_json.expire_time > ts {
@@ -412,12 +391,12 @@ async fn get_accesskey_from_token(
     let dt = Local::now();
     let ts = dt.timestamp() as u64;
     let ts_string = format!("{ts}");
-    let resign_info = UserResignInfo::new(
+    let resign_info: UserResignInfo = serde_json::from_str(
         &bili_runtime
             .redis_get(&format!("a{sub_area_num}1101"))
-            .await
-            .unwrap(),
-    );
+            .await?,
+    )
+    .ok()?;
     let access_key = resign_info.access_key;
     let refresh_token = resign_info.refresh_token;
     let (url, content, proxy_open, proxy_url) = match sub_area_num {
@@ -449,26 +428,23 @@ async fn get_accesskey_from_token(
             Ok(value) => value.resp_content,
             Err(_) => return None,
         };
-    debug!(
-        "[GET AK FROM TOKEN] url {} | content {} | rspdata = {}",
-        url, content, getpost_string
-    );
-    let getpost_json: serde_json::Value = serde_json::from_str(&getpost_string).unwrap();
+    debug!("[GET AK FROM TOKEN] upstream response received");
+    let getpost_json: serde_json::Value = serde_json::from_str(&getpost_string).ok()?;
+    if getpost_json["code"].as_i64()? != 0 {
+        return None;
+    }
     let resign_info = UserResignInfo {
         // area_num: sub_area_num as i32,
         access_key: getpost_json["data"]["token_info"]["access_token"]
-            .as_str()
-            .unwrap()
+            .as_str()?
             .to_string(),
         refresh_token: getpost_json["data"]["token_info"]["refresh_token"]
-            .as_str()
-            .unwrap()
+            .as_str()?
             .to_string(),
         expire_time: getpost_json["data"]["token_info"]["expires_in"]
-            .as_u64()
-            .unwrap()
-            + ts
-            - 3600,
+            .as_u64()?
+            .saturating_sub(3600)
+            .saturating_add(ts),
     };
     bili_runtime
         .redis_set(&format!("a{sub_area_num}1101"), &resign_info.to_json(), 0)

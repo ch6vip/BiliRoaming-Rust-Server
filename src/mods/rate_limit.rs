@@ -1,7 +1,6 @@
 use actix_governor::{KeyExtractor, SimpleKeyExtractionError};
 use actix_web::{dev::ServiceRequest, http::header::ContentType};
 // use governor::clock::{Clock, DefaultClock};
-use qstring::QString;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
@@ -12,15 +11,19 @@ impl KeyExtractor for BiliUserToken {
     type KeyExtractionError = SimpleKeyExtractionError<&'static str>;
 
     fn extract(&self, req: &ServiceRequest) -> Result<Self::Key, Self::KeyExtractionError> {
-        let key = match QString::from(req.query_string()).get("access_key") {
-            Option::Some(key) => key.to_string(),
-            _ => match req.headers().get("X-Real-IP") {
-                Some(value) => value.to_str().unwrap().to_owned(),
-                None => format!("{:?}", req.peer_addr()),
-            },
-            //req.headers().get("X-Real-IP").unwrap().to_str().unwrap().to_owned(),
-        };
-        Ok(key)
+        let config = req
+            .app_data::<(
+                deadpool_redis::Pool,
+                super::types::BiliConfig,
+                std::sync::Arc<async_channel::Sender<super::types::BackgroundTaskType>>,
+            )>()
+            .map(|data| &data.1);
+        let ip = config
+            .and_then(|config| client_ip(req.request(), config))
+            .or_else(|| req.peer_addr().map(|addr| addr.ip()));
+        Ok(ip
+            .map(|ip| ip.to_string())
+            .unwrap_or_else(|| "unknown-peer".into()))
     }
 
     fn exceed_rate_limit_response(
@@ -39,4 +42,23 @@ impl KeyExtractor for BiliUserToken {
             r#"{{"code":-429,"message":"请求过快,请{wait_time}s后重试"}}"#
         ))
     }
+}
+
+/// Only explicitly trusted peers may provide a single X-Real-IP address.
+pub fn client_ip(
+    req: &actix_web::HttpRequest,
+    config: &super::types::BiliConfig,
+) -> Option<std::net::IpAddr> {
+    let peer = req.peer_addr()?.ip();
+    if config.trusted_proxies.contains(&peer) {
+        if let Some(ip) = req
+            .headers()
+            .get("X-Real-IP")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse().ok())
+        {
+            return Some(ip);
+        }
+    }
+    Some(peer)
 }

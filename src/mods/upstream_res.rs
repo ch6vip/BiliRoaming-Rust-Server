@@ -55,11 +55,11 @@ pub fn get_upstream_bili_account_info_rec<'rec>(
             // ("disable_rcmd", "0"),
             // ("local_id",&rand_string_36),
             ("mobi_app",client_type.mobi_app().unwrap_or_else(|| {
-                error!("[GET USER_INFO][U] AK {access_key} | Detect invalid req, try default mobi_app 'android'");
+                error!("[GET USER_INFO][U] AK [redacted] | Detect invalid req, try default mobi_app 'android'");
                 "android"
             })),
             ("platform", client_type.platform().unwrap_or_else(|| {
-                error!("[GET USER_INFO][U] AK {access_key} | Detect invalid req, try default platform 'android'");
+                error!("[GET USER_INFO][U] AK [redacted] | Detect invalid req, try default platform 'android'");
                 "android"
             })),
             // ("s_locale","zh_CN"),
@@ -109,7 +109,7 @@ pub fn get_upstream_bili_account_info_rec<'rec>(
             "https://{}/x/v2/account/myinfo",
             bili_runtime.config.general_app_bilibili_com_proxy_api
         );
-        let (signed_url, sign) = build_signed_url!(api, req_vec, appsec);
+        let (signed_url, _sign) = build_signed_url!(api, req_vec, appsec);
         let upstream_raw_resp = match async_getwebpage(
             &signed_url,
             bili_runtime.config.cn_proxy_accesskey_open,
@@ -123,10 +123,7 @@ pub fn get_upstream_bili_account_info_rec<'rec>(
         {
             Ok(data) => data,
             Err(_) => {
-                error!(
-                "[GET USER_INFO][U] AK {} | Req failed. Network Problems. RAW QUERY -> TS {} Use Proxy {} - {}",
-                access_key, ts_min, bili_runtime.config.cn_proxy_accesskey_open, &bili_runtime.config.cn_proxy_accesskey_url,
-            );
+                error!("[GET USER_INFO][U] AK {} | Req failed. Network Problems. RAW QUERY -> TS {} Use Proxy {} - {}" , "[redacted]", ts_min, "[redacted]", "[redacted]");
                 {
                     let health_report_type = HealthReportType::Others(HealthData {
                         area_num: 0,
@@ -156,7 +153,7 @@ pub fn get_upstream_bili_account_info_rec<'rec>(
         } else {
             debug!(
                 "[GET USER_INFO][U] AK {} | Parsing Upstream reply failed, Upstream Reply -> {}",
-                access_key, upstream_raw_resp
+                "[redacted]", "[redacted]"
             );
             let health_report_type = HealthReportType::Others(HealthData {
                 area_num: 0,
@@ -184,7 +181,7 @@ pub fn get_upstream_bili_account_info_rec<'rec>(
                         .await;
                     error!(
                         "[GET USER_INFO][U] AK {} | Get UserInfo failed -101. Upstream Reply -> {}",
-                        access_key, upstream_raw_resp_json
+                        "[redacted]", "[redacted]"
                     );
                     Err(EType::UserNotLoginedError)
                 } else {
@@ -212,15 +209,11 @@ pub fn get_upstream_bili_account_info_rec<'rec>(
             }
             -3 => {
                 // 不应该出现签名错误, 除非B站更改签名算法
-                error!("[GET USER_INFO][U] AK {} | Get UserInfo failed -3. REQ Params -> APPKEY {} | TS {} | APPSEC {} | SIGN {:?}. Upstream Reply -> {}",
-                    access_key, appkey, ts_min, appsec, sign, upstream_raw_resp_json
-                );
+                error!("[GET USER_INFO][U] AK {} | Get UserInfo failed -3. REQ Params -> APPKEY {} | TS {} | APPSEC {} | SIGN {:?}. Upstream Reply -> {}" , "[redacted]", appkey, ts_min, appsec, "[redacted]", "[redacted]");
                 Ok(UserInfo::new_unintended_error(access_key))
             }
             -400 | -404 => {
-                error!("[GET USER_INFO][U] AK {} -> Get UserInfo failed. Invalid APPKEY -> APPKEY {} | TS {} | APPSEC {}. Upstream Reply -> {}",
-                        access_key, appkey, ts_min, appsec, upstream_raw_resp
-                    );
+                error!("[GET USER_INFO][U] AK {} -> Get UserInfo failed. Invalid APPKEY -> APPKEY {} | TS {} | APPSEC {}. Upstream Reply -> {}" , "[redacted]", appkey, ts_min, appsec, "[redacted]");
                 let health_report_type = HealthReportType::Others(HealthData {
                 area_num: 0,
                 is_200_ok: true,
@@ -256,7 +249,7 @@ pub fn get_upstream_bili_account_info_rec<'rec>(
                 // update_user_info_cache(&output_struct, bili_runtime).await;
                 error!(
                     "[GET USER_INFO][U] AK {} | Get UserInfo failed -101. Upstream Reply -> {}",
-                    access_key, upstream_raw_resp_json
+                    "[redacted]", "[redacted]"
                 );
                 Err(EType::UserNotLoginedError)
             }
@@ -273,7 +266,7 @@ pub fn get_upstream_bili_account_info_rec<'rec>(
             -412 => {
                 error!(
                     "[GET USER_INFO][U] AK {} | Get UserInfo failed -412. Upstream Reply -> {}",
-                    access_key, upstream_raw_resp_json
+                    "[redacted]", "[redacted]"
                 );
                 let health_report_type = HealthReportType::Others(HealthData {
                     area_num: 0,
@@ -300,10 +293,7 @@ pub fn get_upstream_bili_account_info_rec<'rec>(
                 // 已知的-663错误的原因
                 // 1. access_key和appkey不对应, message为"鉴权失败，请联系账号组"
                 // 2. api已经弃用, meassage为"-663"
-                error!(
-                    "[GET USER_INFO][U] AK {} | Get UserInfo failed -663. Using appkey: {}. Upstream Reply -> {}",
-                    access_key, appkey, upstream_raw_resp_json
-                );
+                error!("[GET USER_INFO][U] AK {} | Get UserInfo failed -663. Using appkey: {}. Upstream Reply -> {}" , "[redacted]", appkey, "[redacted]");
                 let upstream_message = upstream_raw_resp_json["message"]
                     .as_str()
                     .unwrap_or("null")
@@ -352,7 +342,9 @@ pub fn get_upstream_bili_account_info_rec<'rec>(
                     )
                     .await
                     {
-                        info!("[GET USER_INFO][U] AK {access_key} | AK异常, 疑似Web脚本生成, 重试成功.");
+                        info!(
+                            "[GET USER_INFO][U] AK [redacted] | AK异常, 疑似Web脚本生成, 重试成功."
+                        );
                         return Ok(new_value);
                     }
                 }
@@ -376,7 +368,7 @@ pub fn get_upstream_bili_account_info_rec<'rec>(
                     is_custom: true,
                     custom_message: format!(
                             "[GET USER_INFO][U] 未知的-663错误类型! 请提issue处理. Upstream Reply -> {}\nAPPKEY: {}, AK: {}, TS: {}",
-                            upstream_message, appkey, access_key, ts
+                            upstream_message, appkey, "[redacted]", ts
                         ),
                 });
                 report_health(health_report_type, bili_runtime).await;
@@ -387,10 +379,8 @@ pub fn get_upstream_bili_account_info_rec<'rec>(
                 ))
             }
             _ => {
-                error!("[GET USER_INFO][U] AK {} -> Get UserInfo failed. REQ Params -> APPKEY {} | TS {} | APPSEC {} | SIGN {:?}. Upstream Reply -> {}",
-                access_key, appkey, ts_min, appsec, sign, upstream_raw_resp_json
-            );
-                error!("[GET USER_INFO][U] URL {}", signed_url);
+                error!("[GET USER_INFO][U] AK {} -> Get UserInfo failed. REQ Params -> APPKEY {} | TS {} | APPSEC {} | SIGN {:?}. Upstream Reply -> {}" , "[redacted]", appkey, ts_min, appsec, "[redacted]", "[redacted]");
+                error!("[GET USER_INFO][U] URL {}", "[redacted]");
                 // 不采用常规方法更新, 仅限用于未知的错误码下的刷新
                 update_cached_user_info_background(access_key.to_owned(), bili_runtime).await;
                 let health_report_type = HealthReportType::Others(HealthData {
@@ -520,7 +510,7 @@ pub async fn get_upstream_bili_account_info_ak_to_mid(
     {
         Ok(value) => value,
         Err(_) => {
-            error!("[GET MID FUNC] AK {access_key} | 获取mid失败, 网络问题");
+            error!("[GET MID FUNC] AK [redacted] | 获取mid失败, 网络问题");
             return None;
         }
     };
@@ -555,17 +545,17 @@ pub async fn get_upstream_bili_account_info_ak_to_mid(
                     ),
                 });
                 report_health(health_report_type, bili_runtime).await;
-                error!("[GET MID FUNC] AK {access_key} | 解析mid失败, API异常. 上级返回内容 -> {upstream_raw_resp}");
+                error!("[GET MID FUNC] AK [redacted] | 解析mid失败, API异常. 上级返回内容 -> [redacted]");
                 None
             }
         }
         -101 | 61000 => {
             // 用户未登录, 即access_key失效
-            error!("[GET MID FUNC] AK {access_key} | 获取mid失败, 用户未登录. 上级返回内容 -> {upstream_raw_resp}");
+            error!("[GET MID FUNC] AK [redacted] | 获取mid失败, 用户未登录. 上级返回内容 -> [redacted]");
             Some(0)
         }
         -999 => {
-            error!("[GET MID FUNC] AK {access_key} | 解析上级返回JSON失败 -> {upstream_raw_resp}");
+            error!("[GET MID FUNC] AK [redacted] | 解析上级返回JSON失败 -> [redacted]");
             let health_report_type = HealthReportType::Others(HealthData {
                 area_num: 0,
                 is_200_ok: true,
@@ -586,7 +576,9 @@ pub async fn get_upstream_bili_account_info_ak_to_mid(
             None
         }
         _ => {
-            error!("[GET MID FUNC] AK {access_key} | 获取mid失败, 致命错误. 上级返回内容 -> {upstream_raw_resp}");
+            error!(
+                "[GET MID FUNC] AK [redacted] | 获取mid失败, 致命错误. 上级返回内容 -> [redacted]"
+            );
             let health_report_type = HealthReportType::Others(HealthData {
                 area_num: 0,
                 is_200_ok: true,
@@ -670,7 +662,7 @@ pub async fn get_upstream_blacklist_info(
             error!("[GET USER_CER_INFO][U] 上游返回好像不是JSON... 是不是没接入公共黑名单?");
             debug!(
                 "[GET USER_CER_INFO][U] 解析上游返回数据错误: {}",
-                upstream_raw_resp.resp_content
+                "[redacted]"
             );
             let health_report_type = HealthReportType::Others(HealthData {
                 area_num: 0,
@@ -721,7 +713,7 @@ pub async fn get_upstream_blacklist_info(
         update_blacklist_info_cache(user_info, &return_data, bili_runtime).await;
         return Ok(return_data);
     } else {
-        error!("[GET USER_CER_INFO][U] UID {uid} -> 鉴权失败: 上游返回 {upstream_raw_resp}");
+        error!("[GET USER_CER_INFO][U] UID {uid} -> 鉴权失败: 上游返回 [redacted]");
         let health_report_type = HealthReportType::Others(HealthData {
             area_num: 0,
             is_200_ok: true,
@@ -858,10 +850,7 @@ pub async fn get_upstream_bili_playurl(
     {
         Ok(data) => data,
         Err(value) => {
-            error!(
-                "[GET PLAYURL][U] AREA {} | EP {} | PROXY_OPEN {} | PROXY_URL {} -> 获取播放链接失败: 网络问题",
-                params.area.to_ascii_uppercase(), params.ep_id, proxy_open, proxy_url
-            );
+            error!("[GET PLAYURL][U] AREA {} | EP {} | PROXY_OPEN {} | PROXY_URL {} -> 获取播放链接失败: 网络问题" , params.area.to_ascii_uppercase(), params.ep_id, proxy_open, "[redacted]");
             report_health(
                 HealthReportType::Playurl(HealthData::init(
                     Area::new(params.area_num),
@@ -901,10 +890,7 @@ pub async fn get_upstream_bili_playurl(
                 bili_runtime,
             )
             .await;
-            error!(
-                "[GET PLAYURL][U] APPKEY {} | APPSEC {} | TS {} | FINAL {} -> 非JSON返回值, 上游实际返回信息: {}",
-                params.appkey, params.appsec, ts, signed_url, upstream_raw_resp
-            );
+            error!("[GET PLAYURL][U] APPKEY {} | APPSEC {} | TS {} | FINAL {} -> 非JSON返回值, 上游实际返回信息: {}" , params.appkey, params.appsec, ts, "[redacted]", "[redacted]");
             return Err(EType::ServerGeneral);
         }
     };
@@ -980,16 +966,10 @@ pub async fn get_upstream_bili_playurl(
                                 )
                                 .await;
                             }
-                            error!(
-                                "[GET PLAYURL][U] UID {} | AK {} | AREA {} | EP {} -> 非大会员用户获取了大会员独享视频, 可能大会员状态变动或限免, 并且尝试更新ep_need_vip成功",
-                                user_info.uid, user_info.access_key, params.area.to_ascii_uppercase(), params.ep_id
-                            );
+                            error!("[GET PLAYURL][U] UID {} | AK {} | AREA {} | EP {} -> 非大会员用户获取了大会员独享视频, 可能大会员状态变动或限免, 并且尝试更新ep_need_vip成功" , user_info.uid, "[redacted]", params.area.to_ascii_uppercase(), params.ep_id);
                         }
                         None => {
-                            error!(
-                                "[GET PLAYURL][U] UID {} | AK {} | AREA {} | EP {} -> 非大会员用户获取了大会员独享视频, 可能大会员状态变动或限免, 并且尝试更新ep_need_vip失败",
-                                user_info.uid, user_info.access_key, params.area.to_ascii_uppercase(), params.ep_id
-                            );
+                            error!("[GET PLAYURL][U] UID {} | AK {} | AREA {} | EP {} -> 非大会员用户获取了大会员独享视频, 可能大会员状态变动或限免, 并且尝试更新ep_need_vip失败" , user_info.uid, "[redacted]", params.area.to_ascii_uppercase(), params.ep_id);
                         }
                     }
                     report_health(
@@ -1020,7 +1000,7 @@ pub async fn get_upstream_bili_playurl(
     debug!(
         "[GET PLAYURL][U] UID {} | AK {} | AREA {} | EP {} -> 获取成功",
         user_info.uid,
-        user_info.access_key,
+        "[redacted]",
         params.area.to_ascii_uppercase(),
         params.ep_id
     );
@@ -1148,10 +1128,7 @@ pub async fn get_upstream_bili_playurl_background(
     {
         Ok(data) => data,
         Err(value) => {
-            error!(
-                "[GET PLAYURL BACKGROUND][U] AREA {} | EP {} | PROXY_OPEN {} | PROXY_URL {} -> 获取播放链接失败: 网络问题",
-                params.area.to_ascii_uppercase(), params.ep_id, proxy_open, proxy_url
-            );
+            error!("[GET PLAYURL BACKGROUND][U] AREA {} | EP {} | PROXY_OPEN {} | PROXY_URL {} -> 获取播放链接失败: 网络问题" , params.area.to_ascii_uppercase(), params.ep_id, proxy_open, "[redacted]");
             report_health(
                 HealthReportType::Playurl(HealthData::init(
                     Area::new(params.area_num),
@@ -1190,10 +1167,7 @@ pub async fn get_upstream_bili_playurl_background(
                 bili_runtime,
             )
             .await;
-            error!(
-                "[GET PLAYURL BACKGROUND][U] APPKEY {} | APPSEC {} | TS {} | FINAL {} -> 非JSON返回值, 上游实际返回信息: {}",
-                        params.appkey, params.appsec, ts, signed_url, upstream_raw_resp
-            );
+            error!("[GET PLAYURL BACKGROUND][U] APPKEY {} | APPSEC {} | TS {} | FINAL {} -> 非JSON返回值, 上游实际返回信息: {}" , params.appkey, params.appsec, ts, "[redacted]", "[redacted]");
             return Err(EType::ServerGeneral);
         }
     };
@@ -1316,9 +1290,9 @@ pub async fn get_upstream_bili_search(
 
     query_vec.sort_by_key(|v| v.0.clone());
 
-    let signed_url =  if !params.is_app {
+    let signed_url = if !params.is_app {
         format!("{}?{}", api, raw_query)
-    }else{
+    } else {
         build_signed_url!(api, query_vec, params.appsec).0
     };
 
@@ -1336,10 +1310,7 @@ pub async fn get_upstream_bili_search(
             let data_json: serde_json::Value = match data.json() {
                 Some(value) => value,
                 None => {
-                    error!(
-                        "[GET SEARCH][U] AREA {} | PROXY_OPEN {} | PROXY_URL {} -> 上游返回非JSON (可能风控412). 上游返回: {}",
-                        params.area.to_ascii_uppercase(), proxy_open, proxy_url, data
-                    );
+                    error!("[GET SEARCH][U] AREA {} | PROXY_OPEN {} | PROXY_URL {} -> 上游返回非JSON (可能风控412). 上游返回: {}" , params.area.to_ascii_uppercase(), proxy_open, "[redacted]", "[redacted]");
                     report_health(
                         HealthReportType::Search(HealthData {
                             area_num: params.area_num,
@@ -1383,20 +1354,12 @@ pub async fn get_upstream_bili_search(
             if upstream_code == 0 {
                 Ok(data_json)
             } else {
-                error!(
-                    "[GET SEARCH][U] AREA {} | PROXY_OPEN {} | PROXY_URL {} ->  Upstream ERROR {upstream_code}: {data_json}",
-                    params.area.to_ascii_uppercase(), proxy_open, proxy_url
-                );
+                error!("[GET SEARCH][U] AREA {} | PROXY_OPEN {} | PROXY_URL {} ->  Upstream ERROR {upstream_code}: {data_json}" , params.area.to_ascii_uppercase(), proxy_open, "[redacted]");
                 Err(EType::ServerReqError("上游错误"))
             }
         }
         Err(_) => {
-            error!(
-                "[GET SEARCH][U] AREA {} | PROXY_OPEN {} | PROXY_URL {} ->  Upstream ERROR: 网络问题",
-                params.area.to_ascii_uppercase(),
-                proxy_open,
-                proxy_url
-            );
+            error!("[GET SEARCH][U] AREA {} | PROXY_OPEN {} | PROXY_URL {} ->  Upstream ERROR: 网络问题" , params.area.to_ascii_uppercase(), proxy_open, "[redacted]");
             report_health(
                 HealthReportType::Search(HealthData::init(
                     Area::new(params.area_num as u8),
@@ -1453,10 +1416,7 @@ pub async fn get_upstream_bili_subtitle(
         }
         Err(value) => {
             // not intented to report_health
-            error!(
-                "[GET TH_SUBTITLE][U] AREA TH | PROXY_OPEN {} | PROXY_URL {} -> Upstream ERROR: 网络问题",
-                proxy_open, proxy_url
-            );
+            error!("[GET TH_SUBTITLE][U] AREA TH | PROXY_OPEN {} | PROXY_URL {} -> Upstream ERROR: 网络问题" , proxy_open, "[redacted]");
             Err(value)
         }
     }
@@ -1509,7 +1469,7 @@ pub async fn get_upstream_bili_season(
                             // 上游返回非JSON (风控页/502/空响应) 时不再panic, 直接透传原始内容
                             error!(
                                 "[GET TH_SEASON][U] 上游返回非JSON, 跳过season改写. 返回内容: {}",
-                                body_data
+                                "[redacted]"
                             );
                             return body_data.resp_content;
                         }
@@ -1699,10 +1659,7 @@ pub async fn get_upstream_bili_season(
             Ok(body_data)
         }
         Err(value) => {
-            error!(
-                "[GET TH_SEASON][U] AREA TH | PROXY_OPEN {} | PROXY_URL {} -> Upstream ERROR: 网络问题",
-                proxy_open, proxy_url
-            );
+            error!("[GET TH_SEASON][U] AREA TH | PROXY_OPEN {} | PROXY_URL {} -> Upstream ERROR: 网络问题" , proxy_open, "[redacted]");
             report_health(
                 HealthReportType::ThSeason(HealthData::init(
                     Area::Th,

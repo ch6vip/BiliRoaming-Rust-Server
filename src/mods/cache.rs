@@ -17,7 +17,7 @@ pub async fn get_cached_ep_area(
     let req_area_num = params.area_num as u8;
     // let key = format!("e{ep_id}1401");
     let data_raw = bili_runtime.get_cache(&CacheType::EpArea(ep_id)).await;
-    let result = if let Some(value) = data_raw {
+    let result = if let Some(value) = data_raw.filter(|v| valid_area_cache(v)) {
         let mut ep_area_data: [u8; 4] = [2, 2, 2, 2];
         // let mut is_all_available = true;
         for (index, char) in value.char_indices() {
@@ -127,12 +127,15 @@ pub async fn update_area_cache(
     bili_runtime: &BiliRuntime<'_>,
 ) {
     let ep_id = params.ep_id;
-    let is_available = check_ep_available(http_body_json);
+    let Some(is_available) = ep_availability(http_body_json) else {
+        return;
+    };
     let area_num = params.area_num as usize;
     let cache_type = CacheType::EpArea(ep_id);
     let value = bili_runtime
         .get_cache(&cache_type)
         .await
+        .filter(|v| valid_area_cache(v))
         .unwrap_or("2222".to_string());
     let new_value = {
         if is_available {
@@ -148,51 +151,29 @@ pub async fn update_area_cache(
         is_available,
         new_value
     );
-    bili_runtime.update_cache(&cache_type, &new_value, 0).await;
+    bili_runtime
+        .update_cache(&cache_type, &new_value, 3600)
+        .await;
 }
 
 #[inline]
-pub fn check_ep_available(http_body_json: &serde_json::Value) -> bool {
-    // 此处判断来自 @cxw620
-    // let http_body_json: serde_json::Value = serde_json::from_str(http_body).unwrap();
-    let code = http_body_json["code"].as_i64().unwrap_or(233);
-    let message = http_body_json["message"].as_str().unwrap_or("").clone();
-    /*
-        {"code":10015002,"message":"访问权限不足","ttl":1}
-        {"code":-10403,"message":"大会员专享限制"}
-        {"code":-10403,"message":"抱歉您所使用的平台不可观看！"}
-        {"code":-10403,"message":"抱歉您所在地区不可观看！"}
-        {"code":-400,"message":"请求错误"}
-        {"code":-404,"message":"啥都木有"}
-        {"code":-404,"message":"啥都木有","ttl":1}
-    */
-    match code {
-        0 => return true,
-        -10403 => {
-            if message == "大会员专享限制" || message == "抱歉您所使用的平台不可观看！"
-            {
-                return true;
-            } else {
-                return false;
-            }
-        }
-        10015002 => {
-            if message == "访问权限不足" {
-                return true;
-            } else {
-                return false;
-            }
-        }
-        -10500 => {
-            return true;
-            // 万恶的米奇妙妙屋,不用家宽就 -10500
-            // link: https://t.me/biliroaming_chat/1231065
-            //       https://t.me/biliroaming_chat/1231113
-        }
-        -404 => {
-            return false;
-        }
-        _ => return false,
+pub fn check_ep_available(data: &serde_json::Value) -> bool {
+    ep_availability(data).unwrap_or(false)
+}
+
+/// Unknown errors (including rate limits and authentication failures) don't describe a region.
+pub fn ep_availability(data: &serde_json::Value) -> Option<bool> {
+    let message = data["message"].as_str().unwrap_or("");
+    match data["code"].as_i64()? {
+        0 | 6002105 | -10500 => Some(true),
+        6002003 | -404 => Some(false),
+        -10403 => match message {
+            "大会员专享限制" | "抱歉您所使用的平台不可观看！" => Some(true),
+            "抱歉您所在地区不可观看！" => Some(false),
+            _ => None,
+        },
+        10015002 if message == "访问权限不足" => Some(true),
+        _ => None,
     }
 }
 
@@ -209,7 +190,7 @@ pub async fn get_cached_user_info(
         .get_cache(&CacheType::UserInfo(access_key, 1145141919810))
         .await
     {
-        Some(value) => Some(serde_json::from_str(&value).unwrap()),
+        Some(value) => serde_json::from_str(&value).ok(),
         None => None,
     }
 }
@@ -222,7 +203,7 @@ pub async fn update_user_info_cache(new_user_info: &UserInfo, bili_runtime: &Bil
     let uid = new_user_info.uid;
     // let key = format!("{access_key}20501");
     let value = new_user_info.to_json();
-    let expire_time = (new_user_info.expire_time - ts) / 1000;
+    let expire_time = (new_user_info.expire_time.saturating_sub(ts) / 1000).max(1);
     // let _: () = redis_set(redis_pool, &key, &value, expire_time)
     //     .await
     //     .unwrap_or_default();
@@ -236,9 +217,9 @@ pub async fn update_user_info_cache(new_user_info: &UserInfo, bili_runtime: &Bil
     debug!(
         "[UPDATE_CACHE] UID {} | AK {} -> is VIP: {}. New user_info cache data: {}",
         new_user_info.uid,
-        new_user_info.access_key,
+        "[redacted]",
         new_user_info.is_vip(),
-        value
+        "[redacted]"
     );
     bili_runtime
         .update_cache(&CacheType::UserInfo(access_key, uid), &value, expire_time)
@@ -280,7 +261,7 @@ pub async fn get_cached_blacklist_info(
                 debug!(
                     "[GET_CACHE][UserCerInfo] UID {} | AK {} -> white {} black {} ban_until {}",
                     user_info.uid,
-                    user_info.access_key,
+                    "[redacted]",
                     user_cer_info.white,
                     user_cer_info.black,
                     user_cer_info.ban_until
@@ -302,7 +283,7 @@ pub async fn update_blacklist_info_cache(
     debug!(
         "[UPDATE_CACHE][UserCerInfo] UID {} | AK {} -> white {} black {} ban_until {}",
         user_info.uid,
-        user_info.access_key,
+        "[redacted]",
         new_user_cer_info.white,
         new_user_cer_info.black,
         new_user_cer_info.ban_until
@@ -345,7 +326,10 @@ pub async fn get_cached_playurl(
 
     match cached_data {
         Some(value) => {
-            cached_data_expire_time = value[..13].parse::<u64>().unwrap();
+            cached_data_expire_time = value
+                .get(..13)
+                .and_then(|s| s.parse::<u64>().ok())
+                .ok_or(())?;
             debug!(
                 "[GET PLAYURL][C] AREA {} | EP {} -> is_app: {} is_tv: {} is_vip {} expire_time {} CacheKey: {} 获取缓存成功 ",
                 params.area.to_ascii_uppercase(),
@@ -356,7 +340,7 @@ pub async fn get_cached_playurl(
                 cached_data_expire_time,
                 vec_to_string(&cache_type.gen_key(),"|")
             );
-            if cached_data_expire_time - 1200000 > ts {
+            if cached_data_expire_time.saturating_sub(1200000) > ts {
                 need_fresh = false;
                 return_data = value[13..].to_string();
             } else if cached_data_expire_time < ts {
@@ -385,7 +369,9 @@ pub async fn update_cached_playurl(
     params.init_ep_need_vip(bili_runtime).await;
     let cache_type = CacheType::Playurl(params);
 
-    let mut body_data_json: serde_json::Value = serde_json::from_str(body_data).unwrap();
+    let Ok(mut body_data_json) = serde_json::from_str::<serde_json::Value>(body_data) else {
+        return;
+    };
     let code = body_data_json["code"].as_i64().unwrap_or(-2333);
 
     let playurl_type: PlayurlType;
@@ -400,13 +386,17 @@ pub async fn update_cached_playurl(
     }
 
     let expire_time = match get_playurl_deadline(playurl_type, &mut body_data_json) {
-        Ok(value) => value - ts / 1000,
+        Ok(value) => match value.checked_sub(ts / 1000) {
+            Some(ttl) if ttl > 0 => ttl,
+            _ => return,
+        },
         Err(_) => match bili_runtime.config.cache.get(&code.to_string()) {
             Some(value) => value,
-            None => bili_runtime.config.cache.get("other").unwrap(),
+            None => bili_runtime.config.cache.get("other").unwrap_or(&300),
         }
         .clone(),
     };
+    let expire_time = expire_time.clamp(1, 86400);
     let value = format!("{}{body_data}", ts + expire_time * 1000);
     bili_runtime
         .update_cache(&cache_type, &value, expire_time)
@@ -429,14 +419,7 @@ fn get_playurl_deadline(
     data: &mut serde_json::Value,
 ) -> Result<u64, ()> {
     fn get_query_string(url: &str) -> Result<&str, ()> {
-        let mut index = 0;
-        for char in url.chars() {
-            if char == '?' {
-                return Ok(&url[index..]);
-            }
-            index += 1;
-        }
-        Err(())
+        url.find('?').and_then(|index| url.get(index..)).ok_or(())
     }
     match playurl_type {
         PlayurlType::Thailand => {
@@ -457,7 +440,7 @@ fn get_playurl_deadline(
                             };
                             let query = QString::from(&query_string[..]);
                             if let Some(value) = query.get("deadline") {
-                                return Ok(value.parse::<u64>().unwrap());
+                                return value.parse::<u64>().map_err(|_| ());
                             }
                         }
                         None => (),
@@ -485,7 +468,7 @@ fn get_playurl_deadline(
                             };
                             let query = QString::from(query_string);
                             if let Some(value) = query.get("deadline") {
-                                return Ok(value.parse::<u64>().unwrap());
+                                return value.parse::<u64>().map_err(|_| ());
                             }
                         }
                         None => (),
@@ -513,7 +496,7 @@ fn get_playurl_deadline(
                             };
                             let query = QString::from(query_string);
                             if let Some(value) = query.get("deadline") {
-                                return Ok(value.parse::<u64>().unwrap());
+                                return value.parse::<u64>().map_err(|_| ());
                             }
                         }
                         None => (),
@@ -551,7 +534,10 @@ pub async fn get_cached_th_season(
                 season_id,
                 vec_to_string(&CacheType::ThSeason(season_id).gen_key(), "|")
             );
-            let redis_get_data_expire_time = &value[..13].parse::<u64>().unwrap();
+            let redis_get_data_expire_time = &value
+                .get(..13)
+                .and_then(|s| s.parse::<u64>().ok())
+                .ok_or(())?;
             if redis_get_data_expire_time > &ts {
                 // TODO: add manual refresh
                 redis_get_data = value[13..].to_string();
@@ -602,7 +588,12 @@ pub async fn get_cached_th_subtitle(
                 params.ep_id,
                 vec_to_string(&CacheType::ThSeason(params.ep_id).gen_key(), "|")
             );
-            if &value[..13].parse::<u64>().unwrap() < &(ts * 1000) {
+            if &value
+                .get(..13)
+                .and_then(|s| s.parse::<u64>().ok())
+                .ok_or(true)?
+                < &(ts * 1000)
+            {
                 Err(true)
             } else {
                 Ok(value[13..].to_string())
@@ -629,4 +620,8 @@ pub async fn update_th_subtitle_cache(
         params.ep_id,
         vec_to_string(&CacheType::ThSeason(params.ep_id).gen_key(), "|")
     );
+}
+
+pub fn valid_area_cache(value: &str) -> bool {
+    value.len() == 4 && value.bytes().all(|b| matches!(b, b'0'..=b'2'))
 }

@@ -5,12 +5,15 @@ api_assesskey_open:
   '2': false
   '3': false
   '4': false
-api_sign: ''
 appsearch_remake: {}
 area_cache_open: true
 blacklist_config: !MixedBlackList
   api: https://black.qimo.ink/api/users/
   api_version: 2
+block_bangumi_ep: []
+block_bangumi_cid: []
+block_bangumi_avid: []
+block_bangumi_bvid: []
 cache:
   '-10403': 6480
   '-404': 1380
@@ -53,6 +56,7 @@ local_wblist:
   '114514':
     - false
     - false
+trusted_proxies: []
 rate_limit_burst: 20
 rate_limit_per_second: 3
 redis: 'redis://:password@host:6379'

@@ -7,7 +7,6 @@
     "3": false,
     "4": false
   },
-  "api_sign": "",
   "appsearch_remake": {},
   "area_cache_open": true,
   "blacklist_config": {
@@ -16,6 +15,10 @@
       "api_version": 2
     }
   },
+  "block_bangumi_ep": [],
+  "block_bangumi_cid": [],
+  "block_bangumi_avid": [],
+  "block_bangumi_bvid": [],
   "cache": {
     "0": 6480,
     "-412": 1380,
@@ -61,6 +64,7 @@
       false
     ]
   },
+  "trusted_proxies": [],
   "rate_limit_burst": 20,
   "rate_limit_per_second": 3,
   "redis": "redis://:password@host:6379",

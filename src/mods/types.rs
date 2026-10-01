@@ -39,6 +39,8 @@ pub struct BiliConfig {
     pub rate_limit_per_second: u64,
     #[serde(default = "default_rate_limit_burst")]
     pub rate_limit_burst: u32,
+    #[serde(default)]
+    pub trusted_proxies: Vec<std::net::IpAddr>,
     pub cn_app_playurl_api: String,
     pub tw_app_playurl_api: String,
     pub hk_app_playurl_api: String,
@@ -113,9 +115,19 @@ pub struct BiliConfig {
     pub blacklist_config: BlackListType,
     pub appsearch_remake: HashMap<String, String>,
     pub websearch_remake: HashMap<String, String>,
+    /// Content-level blocklists. Empty by default so existing configs keep working.
+    /// A request matching any entry is refused before it reaches the upstream API.
+    #[serde(default = "default_vec_u64")]
+    pub block_bangumi_ep: Vec<u64>,
+    #[serde(default = "default_vec_u64")]
+    pub block_bangumi_cid: Vec<u64>,
+    #[serde(default = "default_vec_u64")]
+    pub block_bangumi_avid: Vec<u64>,
+    #[serde(default = "default_vec_string")]
+    pub block_bangumi_bvid: Vec<String>,
     #[serde(default = "default_string")]
     pub donate_url: String,
-    #[serde(default = "random_string")]
+    #[serde(default = "default_string")]
     pub api_sign: String, //实验性
     #[serde(default = "default_hashmap_false")]
     pub api_assesskey_open: HashMap<String, bool>, //api是否暴露
@@ -125,10 +137,9 @@ pub struct BiliConfig {
     pub report_config: ReportConfig,
     #[serde(default = "default_false")]
     pub area_cache_open: bool,
-    // 以下为不会序列化的配置
-    #[serde(skip_serializing, default)]
+    #[serde(default)]
     pub cn_resign_info: UserResignInfo,
-    #[serde(skip_serializing, default)]
+    #[serde(default)]
     pub th_resign_info: UserResignInfo,
 }
 
@@ -184,58 +195,33 @@ impl<'bili_runtime> BiliRuntime<'bili_runtime> {
     }
     pub async fn update_cache(&self, cache_type: &CacheType<'_>, value: &str, expire_time: u64) {
         let keys = cache_type.gen_key();
-        // let _new_value: &str;
-        match cache_type {
-            CacheType::Playurl(_params) => {
-                // vip用户获取到playurl后刷新缓存, keys[0]就是vip的key, keys[1]就是non-vip的key
-                redis_set(self.redis_pool, &keys[0], value, expire_time).await;
-                // 双保险, 虽然实际上应该只需要`keys.len() > 1`
-                // if params.is_vip && !params.ep_need_vip {
-                //     let playurl_type = &params.get_playurl_type();
-                //     if let Some(value) = remove_viponly_clarity(playurl_type, value).await {
-                //         redis_set(self.redis_pool, &keys[1], &value, expire_time)
-                //             .await
-                //             .unwrap()
-                //     }
-                // }
-            }
-            _ => {
-                for key in keys {
-                    redis_set(self.redis_pool, &key, value, expire_time)
-                        .await
-                        .unwrap()
-                }
-            }
+        let count = if matches!(cache_type, CacheType::Playurl(_)) {
+            1
+        } else {
+            keys.len()
+        };
+        for key in keys.iter().take(count) {
+            self.redis_set(key, value, expire_time).await;
         }
-
-        // for key in keys {
-        //     redis_set(self.redis_pool, &key, value, expire_time)
-        //         .await
-        //         .unwrap()
-        // }
     }
     pub async fn redis_get(&self, key: &str) -> Option<String> {
         redis_get(self.redis_pool, key).await
     }
     pub async fn redis_set(&self, key: &str, value: &str, expire_time: u64) {
-        redis_set(self.redis_pool, key, value, expire_time)
+        if redis_set(self.redis_pool, key, value, expire_time)
             .await
-            .unwrap()
+            .is_none()
+        {
+            log::warn!("Redis cache write failed");
+        }
     }
-    pub async fn send_task(&self, background_task_data: BackgroundTaskType) {
-        let bilisender = Arc::clone(&self.channel);
-        tokio::spawn(async move {
-            //println!("[Debug] bilisender_cl.len:{}", bilisender_cl.len());
-            match bilisender.try_send(background_task_data) {
-                Ok(_) => (),
-                Err(TrySendError::Full(_)) => {
-                    println!("[Error] channel is full");
-                }
-                Err(TrySendError::Closed(_)) => {
-                    println!("[Error] channel is closed");
-                }
-            };
-        });
+    pub async fn send_task(&self, task: BackgroundTaskType) {
+        if let Err(error) = self.channel.try_send(task) {
+            match error {
+                TrySendError::Full(_) => log::warn!("Background queue is full"),
+                TrySendError::Closed(_) => log::warn!("Background queue is closed"),
+            }
+        }
     }
 }
 
@@ -694,7 +680,7 @@ impl<'cache_type> CacheType<'cache_type> {
                 let mut key = String::with_capacity(16);
                 key.push_str("e");
                 key.push_str(ep_id);
-                key += "1401";
+                key += "1402";
                 keys.push(key);
             }
             CacheType::EpVipInfo(ep_id) => {
@@ -727,19 +713,18 @@ impl<'cache_type> CacheType<'cache_type> {
                 key.push_str(&uid.to_string());
                 key += "20602";
                 keys.push(key);
-            }
-            // CacheType::UserUniqueInfo(access_key, uid) => {
-            //     let mut key = String::with_capacity(64);
-            //     key.push_str("a");
-            //     key.push_str(access_key);
-            //     key += "2001";
-            //     keys.push(key);
-            //     let mut key = String::with_capacity(32);
-            //     key.push_str("u");
-            //     key.push_str(&uid.to_string());
-            //     key += "2001";
-            //     keys.push(key);
-            // },
+            } // CacheType::UserUniqueInfo(access_key, uid) => {
+              //     let mut key = String::with_capacity(64);
+              //     key.push_str("a");
+              //     key.push_str(access_key);
+              //     key += "2001";
+              //     keys.push(key);
+              //     let mut key = String::with_capacity(32);
+              //     key.push_str("u");
+              //     key.push_str(&uid.to_string());
+              //     key += "2001";
+              //     keys.push(key);
+              // },
         };
         keys
     }
@@ -847,6 +832,42 @@ macro_rules! build_response {
     };
 }
 
+/// Like `build_response!`, but for refusals whose answer cannot change between requests
+/// (malformed request, unsupported UA, wrong signature, stale client version, missing
+/// parameter). Clients retry these immediately, so a short shared cache keeps the retry
+/// storm off this process and off the upstream API.
+///
+/// Deliberately NOT used for blacklist / whitelist / content-blocklist / credential
+/// refusals: those change as soon as an operator edits the config, and a cached refusal
+/// would keep rejecting after the entry was removed.
+#[macro_export]
+macro_rules! build_static_refusal_response {
+    ($resp:expr) => {
+        return HttpResponse::Ok()
+            .content_type(ContentType::json())
+            .insert_header(("From", "biliroaming-rust-server"))
+            .insert_header(("Access-Control-Allow-Origin", "https://www.bilibili.com"))
+            .insert_header(("Access-Control-Allow-Credentials", "true"))
+            .insert_header(("Access-Control-Allow-Methods", "GET"))
+            .insert_header(("Cache-Control", "public, max-age=30"))
+            .body($resp)
+    };
+    // Mirrors the `build_response!(code, msg)` form.
+    ($err_code:expr, $err_msg:expr) => {
+        return HttpResponse::Ok()
+            .content_type(ContentType::json())
+            .insert_header(("From", "biliroaming-rust-server"))
+            .insert_header(("Access-Control-Allow-Origin", "https://www.bilibili.com"))
+            .insert_header(("Access-Control-Allow-Credentials", "true"))
+            .insert_header(("Access-Control-Allow-Methods", "GET"))
+            .insert_header(("Cache-Control", "public, max-age=30"))
+            .body(format!(
+                "{{\"code\":{},\"message\":\"其他错误: {}\"}}",
+                $err_code, $err_msg
+            ))
+    };
+}
+
 #[macro_export]
 /// support like `build_signed_url!(unsigned_url, vec![query_param], "sign_secret");`, return tuple (signed_url, md5_sign), mg5_sign for debug
 macro_rules! build_signed_url {
@@ -857,9 +878,7 @@ macro_rules! build_signed_url {
         signed_url.push_str("?");
         signed_url.push_str(&req_params);
         signed_url.push_str("&sign=");
-        let mut sign = crypto::md5::Md5::new();
-        crypto::digest::Digest::input_str(&mut sign, &(req_params + $sign_secret));
-        let md5_sign = crypto::digest::Digest::result_str(&mut sign);
+        let md5_sign = $crate::calc_md5!(req_params + $sign_secret);
         signed_url.push_str(&md5_sign);
         (signed_url, md5_sign)
     }};
@@ -872,9 +891,7 @@ macro_rules! build_signed_params {
         let mut signed_params = String::with_capacity(600);
         signed_params.push_str(&req_params);
         signed_params.push_str("&sign=");
-        let mut sign = crypto::md5::Md5::new();
-        crypto::digest::Digest::input_str(&mut sign, &(req_params + $sign_secret));
-        let md5_sign = crypto::digest::Digest::result_str(&mut sign);
+        let md5_sign = $crate::calc_md5!(req_params + $sign_secret);
         signed_params.push_str(&md5_sign);
         (signed_params, md5_sign)
     }};
@@ -883,9 +900,7 @@ macro_rules! build_signed_params {
 #[macro_export]
 macro_rules! calc_md5 {
     ($input_str: expr) => {{
-        let mut md5_instance = crypto::md5::Md5::new();
-        crypto::digest::Digest::input_str(&mut md5_instance, &($input_str));
-        crypto::digest::Digest::result_str(&mut md5_instance)
+        format!("{:x}", md5::compute($input_str))
     }};
 }
 
@@ -917,7 +932,7 @@ pub enum HealthTask {
 }
 pub enum CacheTask {
     UserInfoCacheRefresh(String),
-    PlayurlCacheRefresh(PlayurlParamsStatic),
+    PlayurlCacheRefresh(PlayurlParamsStatic, super::background_tasks::RefreshGuard),
     ProactivePlayurlCacheRefresh,
     EpInfoCacheRefresh(bool, Vec<EpInfo>),
     EpAreaCacheRefresh(String, String),
@@ -1725,6 +1740,14 @@ fn default_string() -> String {
     "".to_string()
 }
 
+fn default_vec_u64() -> Vec<u64> {
+    Vec::new()
+}
+
+fn default_vec_string() -> Vec<String> {
+    Vec::new()
+}
+
 fn default_api_bilibili_com() -> String {
     "api.bilibili.com".to_string()
 }
@@ -2125,7 +2148,7 @@ impl PlayurlParamsStatic {
             PlayurlType::ChinaWeb
         }
     }
-    pub fn as_ref(&self) -> PlayurlParams {
+    pub fn as_ref(&self) -> PlayurlParams<'_> {
         PlayurlParams {
             access_key: &self.access_key,
             appkey: &self.appkey,
@@ -2621,6 +2644,7 @@ pub enum EType {
     ReqUAError,                //请求UA异常
     UserBlacklistedError(i64), //用户黑名单错误
     UserWhitelistedError,      //服务器仅允许白名单内用户使用
+    ContentBlockedError,       //请求的内容被服务端屏蔽
     UserNonVIPError,           //大会员错误
     UserNotLoginedError,       //用户未登录错误
     UserLoginInvalid,          //用户登录无效
@@ -2665,6 +2689,9 @@ impl EType {
             EType::UserWhitelistedError => {
                 String::from("{\"code\":-10403,\"message\":\"服务器不欢迎您: 白名单限制\"}")
             }
+            EType::ContentBlockedError => String::from(
+                "{\"code\":-10403,\"message\":\"服务器不欢迎您: 该内容已被服务端屏蔽\"}",
+            ),
             EType::UserNonVIPError => {
                 String::from("{\"code\":-10403,\"message\":\"大会员专享限制\"}")
             }

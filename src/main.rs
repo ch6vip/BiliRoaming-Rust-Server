@@ -16,7 +16,7 @@ use biliroaming_rust_server::mods::types::{BackgroundTaskType, BiliConfig, BiliR
 use deadpool_redis::{Config, Pool, Runtime};
 use futures::join;
 use lazy_static::lazy_static;
-use log::{debug, error, info};
+use log::{error, info};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -130,9 +130,9 @@ async fn http2https_handler(req: HttpRequest) -> impl Responder {
     let https_port = req.app_data::<u16>().unwrap();
     let uri = req.uri();
     let host = match req.headers().get("Host") {
-        Some(host) => host.to_str().unwrap(),
+        Some(host) => host.to_str().unwrap_or(""),
         _ => match req.headers().get("authority") {
-            Some(host) => host.to_str().unwrap(),
+            Some(host) => host.to_str().unwrap_or(""),
             _ => {
                 error!("无法获取host");
                 ""
@@ -172,15 +172,6 @@ lazy_static! {
 }
 
 fn main() -> std::io::Result<()> {
-    // 拿来生成signed_url挺方便的 此处测试用
-    // let req_params = "access_key=ecffae5ae699fad2653d99120b2f5d11&appkey=27eb53fc9058f8c3&ep_id=508404&fnval=4048&fnver=0&fourk=1&otype=json&qn=112&ts=1673168456811";
-    // let mut signed_params = format!("{req_params}&sign=");
-    // let mut sign = crypto::md5::Md5::new();
-    // crypto::digest::Digest::input_str(&mut sign, &format!("{req_params}c2ed53a74eeefe3cf99fbd01d8c9c375"));
-    // let md5_sign = crypto::digest::Digest::result_str(&mut sign);
-    // signed_params.push_str(&md5_sign);
-    // println!("{signed_params}");
-
     // init log
     use chrono::Local;
     use std::io::Write;
@@ -226,27 +217,12 @@ fn main() -> std::io::Result<()> {
         let bili_runtime = BiliRuntime::new(&*SERVER_CONFIG, &*REDIS_POOL, &*BILISENDER);
         rt.block_on(prepare_before_start(bili_runtime));
     }
-    let web_background = async move {
-        let r = &CHANNEL.1;
-        loop {
-            let receive_data = match r.recv().await {
-                Ok(it) => it,
-                _ => {
-                    debug!("[Channel] failed to receive data");
-                    break;
-                }
-            };
-            let bili_runtime = BiliRuntime::new(&*SERVER_CONFIG, &*REDIS_POOL, &*BILISENDER);
-            //println!("[Debug] r:{}",r.len());
-            tokio::spawn(async move {
-                match background_task_run(receive_data, &bili_runtime).await {
-                    Ok(_) => (),
-                    Err(value) => error!("{value}"),
-                };
-            });
+    let web_background = run_background_queue(&CHANNEL.1, |task| async move {
+        let runtime = BiliRuntime::new(&SERVER_CONFIG, &REDIS_POOL, &BILISENDER);
+        if let Err(error) = background_task_run(task, &runtime).await {
+            error!("{error}");
         }
-        //println!("[Debug] exit web_background");
-    };
+    });
 
     let rate_limit_per_second = if server_config.rate_limit_per_second == 0 {
         1
@@ -260,26 +236,23 @@ fn main() -> std::io::Result<()> {
         server_config.rate_limit_burst
     };
     let rate_limit_conf = GovernorConfigBuilder::default()
-        .per_second(rate_limit_per_second)
+        .seconds_per_request(rate_limit_per_second)
         .burst_size(rate_limit_burst)
         .key_extractor(BiliUserToken)
         .finish()
         .unwrap();
 
-    let ssl_config: Option<rustls::ServerConfig>;
-    let use_https: bool;
-    if server_config.https_support {
-        ssl_config = if let Ok(value) = load_sslconfig() {
-            use_https = true;
-            Some(value)
-        } else {
-            use_https = false;
-            None
-        };
+    let use_https = server_config.https_support;
+    let ssl_config = if use_https {
+        Some(load_sslconfig().map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("TLS configuration failed: {error}"),
+            )
+        })?)
     } else {
-        use_https = false;
-        ssl_config = None;
-    }
+        None
+    };
 
     if use_https && SERVER_CONFIG.http2https_support {
         let web_main = HttpServer::new(move || {
@@ -304,7 +277,7 @@ fn main() -> std::io::Result<()> {
                 .service(Files::new("/", "./web/").index_file("index.html"))
                 .default_service(web::route().to(web_default))
         })
-        .bind_rustls(("0.0.0.0", https_port), ssl_config.unwrap())
+        .bind_rustls_0_23(("0.0.0.0", https_port), ssl_config.unwrap())
         .unwrap()
         .workers(woker_num)
         .keep_alive(Duration::from_secs(20))
@@ -345,7 +318,7 @@ fn main() -> std::io::Result<()> {
                 .service(Files::new("/", "./web/").index_file("index.html"))
                 .default_service(web::route().to(web_default))
         })
-        .bind_rustls(("0.0.0.0", https_port), ssl_config.unwrap())
+        .bind_rustls_0_23(("0.0.0.0", https_port), ssl_config.unwrap())
         .unwrap()
         .workers(woker_num)
         .keep_alive(Duration::from_secs(20))
