@@ -3,6 +3,7 @@ use super::cache::{
 };
 use super::health::report_health;
 use super::rate_limit::client_ip;
+use super::types::UserInfo;
 use super::types::{
     random_string, Area, BackgroundTaskType, BiliConfig, BiliRuntime, ClientType, EType,
     HealthData, HealthReportType, PlayurlParams, SearchParams,
@@ -12,7 +13,6 @@ use super::upstream_res::{
     get_upstream_bili_subtitle,
 };
 use super::user_info::*;
-use super::types::UserInfo;
 use crate::{build_response, build_result_response, build_static_refusal_response, calc_md5};
 use actix_web::http::header::ContentType;
 use actix_web::{HttpRequest, HttpResponse};
