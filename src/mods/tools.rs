@@ -130,6 +130,84 @@ pub fn check_vip_status_from_playurl(
     }
 }
 
+/// 非大会员:从 playurl 响应中剥离 need_vip 画质,只保留免费档。
+///
+/// 背景(2026-10-02):上游对限免/状态变动的番剧会在响应里同时下发免费画质和
+/// need_vip 画质(如 4K/1080P 高码率),原 check_vip_status_from_playurl 只要见到
+/// 任何 need_vip 画质轨就整体 -10403——即使请求的就是免费档、响应里有完整免费轨。
+/// 现改为:剥离会员画质后仍有免费内容就放行,全部画质都需会员才走 -10403。
+///
+/// 返回 true = 剥离后仍有可服务内容(dash 视频轨或 durl);false = 全是会员画质。
+/// 同时把 `quality` 修正为剩余最高画质,并同步裁剪 support_formats /
+/// accept_quality / accept_description(三者同序同长)。
+pub fn strip_need_vip_qualities(data: &mut serde_json::Value) -> bool {
+    if data["code"].as_i64().unwrap_or(-2333) != 0 {
+        return false;
+    }
+    let need_vip_ids: Vec<u64> = data["support_formats"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| item["need_vip"].as_bool().unwrap_or(false))
+                .filter_map(|item| item["quality"].as_u64())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // dash.video 按画质 id 剥离;没有 dash(durl 形态)时不剥,保持原放行行为
+    if let Some(videos) = data["dash"]["video"].as_array_mut() {
+        videos.retain(|v| {
+            let id = v["id"].as_u64().unwrap_or(0);
+            !need_vip_ids.contains(&id)
+        });
+        if videos.is_empty() {
+            return false;
+        }
+    }
+
+    if let Some(items) = data["support_formats"].as_array_mut() {
+        items.retain(|item| !item["need_vip"].as_bool().unwrap_or(false));
+    }
+    // accept_quality / accept_description 与 support_formats 同序,按保留下来的画质 id 同步裁剪
+    let keep: Vec<u64> = data["support_formats"]
+        .as_array()
+        .map(|items| items.iter().filter_map(|i| i["quality"].as_u64()).collect())
+        .unwrap_or_default();
+    let aq_snapshot: Vec<serde_json::Value> = data["accept_quality"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let ad_snapshot: Vec<serde_json::Value> = data["accept_description"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if !aq_snapshot.is_empty() && !ad_snapshot.is_empty() {
+        let kept_pairs: Vec<(serde_json::Value, serde_json::Value)> = aq_snapshot
+            .into_iter()
+            .zip(ad_snapshot.into_iter())
+            .filter(|(q, _)| {
+                q.as_u64()
+                    .map_or(false, |qid| keep.contains(&qid))
+            })
+            .collect();
+        let new_aq: Vec<serde_json::Value> = kept_pairs.iter().map(|(q, _)| q.clone()).collect();
+        let new_ad: Vec<serde_json::Value> =
+            kept_pairs.into_iter().map(|(_, d)| d).collect();
+        data["accept_quality"] = serde_json::Value::Array(new_aq);
+        data["accept_description"] = serde_json::Value::Array(new_ad);
+    }
+
+    // quality 修正为剩余最高画质
+    if let Some(max_q) = data["dash"]["video"]
+        .as_array()
+        .and_then(|v| v.iter().filter_map(|x| x["id"].as_u64()).max())
+    {
+        data["quality"] = serde_json::json!(max_q);
+    }
+    true
+}
+
 #[inline]
 pub fn get_user_mid_from_playurl(playurl_string: &str) -> Option<u64> {
     // 感觉不太优雅...

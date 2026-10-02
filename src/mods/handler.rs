@@ -893,9 +893,13 @@ pub fn valid_access_key(key: &str) -> bool {
     if key.len() == 32 && key.bytes().all(|b| b.is_ascii_hexdigit()) {
         return true;
     }
-    // 国际版（com.bilibili.app.in）令牌：长字母数字串（实测 getAccessKey 返回 220 字符，
-    // 旧 32-hex 校验会把国际版用户全部拒为 -101"账号未登录"）
-    key.len() >= 40 && key.len() <= 256 && key.bytes().all(|b| b.is_ascii_alphanumeric())
+    // 国际版（com.bilibili.app.in）令牌：长 base64url 串（实测 getAccessKey 返回 220 字符，
+    // 含 '-'/'_'——纯 alphanumeric 校验会把这类令牌拒为 -101"账号未登录"）
+    key.len() >= 40
+        && key.len() <= 256
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 pub fn valid_query_sign(query: &str, secret: &str) -> bool {
     let Some((unsigned, sign)) = query.rsplit_once("&sign=") else {

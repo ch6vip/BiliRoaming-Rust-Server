@@ -10,10 +10,12 @@ use super::health::report_health;
 use super::request::async_getwebpage;
 use super::tools::{
     check_vip_status_from_playurl, get_user_mid_from_playurl, remove_parameters_playurl,
+    strip_need_vip_qualities,
 };
 use super::types::{
     Area, BiliRuntime, ClientType, EType, EpInfo, FakeUA, HealthData, HealthReportType,
-    PlayurlParams, ReqType, SearchParams, UniqueId, UpstreamReply, UserCerinfo, UserInfo,
+    PlayurlParams, PlayurlType, ReqType, SearchParams, UniqueId, UpstreamReply, UserCerinfo,
+    UserInfo,
 };
 use super::user_info::get_blacklist_info;
 use crate::{build_signed_url, random_string};
@@ -897,6 +899,17 @@ pub async fn get_upstream_bili_playurl(
     let code = upstream_raw_resp_json["code"].as_i64().unwrap_or(-2333);
     remove_parameters_playurl(&playurl_type, &mut upstream_raw_resp_json).unwrap_or_default();
 
+    // 非大会员:剥离 need_vip 画质,只保留免费档(2026-10-02)。
+    // 原逻辑是 check_vip_status_from_playurl 见到任何 need_vip 画质轨就整体 -10403,
+    // 但上游对限免番剧会同时下发免费画质与会员画质——请求免费档也会被整体拒绝。
+    // 现改为剥离后仍有免费内容就放行;全部画质都需会员时才走下方 -10403 分支。
+    // 剥离必须先于 area_cache / playurl_cache 写入,保证缓存里不会混入会员画质轨。
+    let mut all_vip_after_strip = false;
+    if !params.is_th && !params.is_vip && matches!(playurl_type, PlayurlType::ChinaApp) {
+        let has_free = strip_need_vip_qualities(&mut upstream_raw_resp_json);
+        all_vip_after_strip = !has_free;
+    }
+
     update_area_cache(&upstream_raw_resp_json, params, bili_runtime).await;
     // report health
     let message = upstream_raw_resp_json["message"]
@@ -950,9 +963,18 @@ pub async fn get_upstream_bili_playurl(
         }
         // 防止东南亚区共享VIP出问题
         if !params.is_vip {
-            if let Ok(value) = check_vip_status_from_playurl(playurl_type, &upstream_raw_resp_json)
-            {
-                if value && (!params.is_vip) {
+            // ChinaApp:上方已完成 need_vip 剥离,这里只需判断"剥离后是否还有免费画质";
+            // 剥离后的响应 need_vip 列表恒为空,原 check 会落到 vip_status 兜底造成误拒,故绕开。
+            // 其余类型(ChinaWeb 等)保持原 check 语义。
+            let vip_flag = if matches!(playurl_type, PlayurlType::ChinaApp) {
+                all_vip_after_strip
+            } else {
+                matches!(
+                    check_vip_status_from_playurl(playurl_type, &upstream_raw_resp_json),
+                    Ok(true)
+                )
+            };
+            if vip_flag && (!params.is_vip) {
                     match get_ep_need_vip(params.ep_id, bili_runtime).await {
                         Some(ep_need_vip) => {
                             if ep_need_vip == 1 {
@@ -992,7 +1014,6 @@ pub async fn get_upstream_bili_playurl(
                         -10403,
                         "检测到可能刚刚买了带会员, 刷新缓存中, 请稍后重试喵",
                     ));
-                }
             }
         }
     }
