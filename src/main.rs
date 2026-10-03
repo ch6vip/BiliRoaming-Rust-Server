@@ -8,7 +8,7 @@ use biliroaming_rust_server::mods::config::{init_biliconfig, prepare_before_star
 use biliroaming_rust_server::mods::config::{load_sslconfig, update_biliconfig};
 use biliroaming_rust_server::mods::handler::{
     errorurl_reg, handle_api_access_key_request, handle_playurl_request, handle_search_request,
-    handle_th_season_request, handle_th_subtitle_request,
+    handle_cn_season_request, handle_th_season_request, handle_th_subtitle_request,
 };
 use biliroaming_rust_server::mods::middleware::compress::ChangeCompressPriority;
 use biliroaming_rust_server::mods::rate_limit::BiliUserToken;
@@ -114,6 +114,11 @@ async fn thsearch_app(req: HttpRequest) -> impl Responder {
 #[get("/intl/gateway/v2/ogv/view/app/season")]
 async fn thseason_app(req: HttpRequest) -> impl Responder {
     handle_th_season_request(&req, true, true).await
+}
+
+#[get("/pgc/view/web/season")]
+async fn cn_season(req: HttpRequest) -> impl Responder {
+    handle_cn_season_request(&req, true, false).await
 }
 
 #[get("/intl/gateway/v2/app/subtitle")]
@@ -271,6 +276,7 @@ fn main() -> std::io::Result<()> {
                 .service(zhsearch_web)
                 .service(thsearch_app)
                 .service(thseason_app)
+                .service(cn_season)
                 .service(thsubtitle_web)
                 .service(api_accesskey)
                 .service(donate)
@@ -312,6 +318,7 @@ fn main() -> std::io::Result<()> {
                 .service(zhsearch_web)
                 .service(thsearch_app)
                 .service(thseason_app)
+                .service(cn_season)
                 .service(thsubtitle_web)
                 .service(api_accesskey)
                 .service(donate)
@@ -340,6 +347,7 @@ fn main() -> std::io::Result<()> {
                 .service(zhsearch_web)
                 .service(thsearch_app)
                 .service(thseason_app)
+                .service(cn_season)
                 .service(thsubtitle_web)
                 .service(api_accesskey)
                 .service(donate)

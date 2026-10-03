@@ -3,10 +3,11 @@ use super::cache::{
 };
 use super::health::report_health;
 use super::rate_limit::client_ip;
+use super::request::async_getwebpage;
 use super::types::UserInfo;
 use super::types::{
     random_string, Area, BackgroundTaskType, BiliConfig, BiliRuntime, ClientType, EType,
-    HealthData, HealthReportType, PlayurlParams, SearchParams,
+    HealthData, HealthReportType, PlayurlParams, ReqType, SearchParams,
 };
 use super::upstream_res::{
     get_upstream_bili_playurl, get_upstream_bili_search, get_upstream_bili_season,
@@ -665,6 +666,46 @@ pub async fn handle_th_season_request(
         Err(_) => get_upstream_bili_season(&params, &bili_runtime).await,
     };
     build_result_response!(resp);
+}
+
+// CN season（tw/hk 限定番剧的季数据在 CN API，地区门按 IP 判定——需经出口代理取数；
+// 供模块选集面板注入用：/pgc/view/web/season?season_id=|ep_id=，其余查询参数原样转发）
+pub async fn handle_cn_season_request(
+    req: &HttpRequest,
+    _is_app: bool,
+    _is_cn: bool,
+) -> HttpResponse {
+    let (redis_pool, config, bilisender) = req
+        .app_data::<(Pool, BiliConfig, Arc<Sender<BackgroundTaskType>>)>()
+        .unwrap();
+    let bili_runtime = BiliRuntime::new(config, redis_pool, bilisender);
+    let client_ip = client_ip(req, config)
+        .map(|ip| ip.to_string())
+        .unwrap_or_default();
+    let user_agent = match req.headers().get("user-agent") {
+        Option::Some(ua) => ua.to_str().unwrap_or(""),
+        Option::None => {
+            warn!("[GET CN_SEASON] IP {client_ip} | Detect req without UA");
+            build_static_refusal_response!(EType::ReqUAError.to_string())
+        }
+    };
+    // 上游匿名可用（TW 出口视角）；带 access_key 时仍校验格式
+    if let Some(key) = QString::from(req.query_string()).get("access_key") {
+        if !valid_access_key(key) {
+            error!("[GET CN_SEASON] IP {client_ip} -> invalid access_key [redacted]");
+            return build_response!(EType::UserNotLoginedError);
+        }
+    }
+    let api = ReqType::CnSeason.get_api(config);
+    let (proxy_open, proxy_url) = ReqType::CnSeason.get_proxy(config);
+    let url = format!("{api}?{}", req.query_string());
+    debug!("[GET CN_SEASON] IP {client_ip} | CN SEASON -> REQ TRACE");
+    match async_getwebpage(&url, proxy_open, proxy_url, user_agent, "", None).await {
+        Ok(body) => HttpResponse::Ok()
+            .content_type(ContentType::json())
+            .body(body.resp_content),
+        Err(e) => build_static_refusal_response!(e.to_string()),
+    }
 }
 
 pub async fn handle_th_subtitle_request(req: &HttpRequest, _: bool, _: bool) -> HttpResponse {

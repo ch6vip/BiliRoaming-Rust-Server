@@ -87,6 +87,12 @@ pub struct BiliConfig {
     pub cn_proxy_accesskey_open: bool,
     pub th_proxy_subtitle_url: String,
     pub th_proxy_subtitle_open: bool,
+    #[serde(default = "default_string")]
+    pub cn_season_api: String,
+    #[serde(default = "default_string")]
+    pub cn_proxy_season_url: String,
+    #[serde(default = "default_false")]
+    pub cn_proxy_season_open: bool,
     #[serde(default = "default_api_bilibili_com")]
     pub general_api_bilibili_com_proxy_api: String,
     #[serde(default = "default_app_bilibili_com")]
@@ -513,6 +519,7 @@ pub enum ReqType {
     Search(Area, bool),
     ThSeason,
     ThSubtitle,
+    CnSeason,
     Accesskey,
     Other(bool, String),
 }
@@ -555,6 +562,7 @@ impl ReqType {
             }
             ReqType::ThSeason => &config.th_app_season_api,
             ReqType::ThSubtitle => &config.th_app_season_sub_api,
+            ReqType::CnSeason => &config.cn_season_api,
             ReqType::Accesskey => unimplemented!(),
             ReqType::Other(_, _) => "",
         }
@@ -575,6 +583,7 @@ impl ReqType {
             },
             ReqType::ThSeason => (config.th_proxy_playurl_open, &config.th_proxy_playurl_url),
             ReqType::ThSubtitle => (config.th_proxy_subtitle_open, &config.th_proxy_subtitle_url),
+            ReqType::CnSeason => (config.cn_proxy_season_open, &config.cn_proxy_season_url),
             ReqType::Accesskey => unimplemented!(),
             ReqType::Other(_, _) => (false, ""),
         }
