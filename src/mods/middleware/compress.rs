@@ -1,6 +1,6 @@
 use actix_web::{
     dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
-    http::header::AcceptEncoding,
+    http::header::{self, AcceptEncoding, HeaderValue},
     Error, HttpMessage,
 };
 use futures::future::LocalBoxFuture;
@@ -42,61 +42,62 @@ where
     forward_ready!(service);
 
     fn call(&self, mut req: ServiceRequest) -> Self::Future {
-        let accept_encoding = req.get_header::<AcceptEncoding>();
-        if let Some(_) = accept_encoding {
-            let headers = req.headers_mut();
-            let mut accept_encodings = headers
-                .get("Accept-Encoding")
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .split(',')
-                .map(|header_value| {
-                    let temp = header_value
-                        .split(';')
-                        .map(|value| value.trim())
-                        .collect::<Vec<&str>>();
-                    let mut temp2 = ((&temp[0]).to_string(), 0);
-                    if temp.len() == 1 {
-                        temp2.1 = {
-                            match temp[0] {
+        // Every value here is attacker controlled, so a malformed
+        // `Accept-Encoding` must degrade to "unknown weight" instead of
+        // unwrapping and taking down the worker.
+        if req.get_header::<AcceptEncoding>().is_some() {
+            let raw = req
+                .headers()
+                .get(header::ACCEPT_ENCODING)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
+            if let Some(raw) = raw {
+                let mut weighted: Vec<(String, i32)> = raw
+                    .split(',')
+                    .filter_map(|item| {
+                        let mut parts = item.split(';').map(str::trim);
+                        let token = parts.next().filter(|token| !token.is_empty())?;
+                        let weight = match parts.next() {
+                            // No `;q=` parameter: use the fixed server ranking.
+                            None => match token {
                                 "br" => 5,
                                 "zstd" => 4,
                                 "gzip" => 3,
                                 "deflate" => 2,
-                                "identity" => 1,
-                                "*" => 1,
+                                "identity" | "*" => 1,
                                 _ => 0,
-                            }
+                            },
+                            // `q=`/`Q=` value; anything unparsable is ignored.
+                            Some(q) => q
+                                .strip_prefix("q=")
+                                .or_else(|| q.strip_prefix("Q="))
+                                .and_then(|value| value.parse::<f32>().ok())
+                                .map(|value| (value * 10.0) as i32)
+                                .unwrap_or(0),
                         };
-                    } else {
-                        temp2.1 = (&temp[1]
-                            .char_indices()
-                            .filter(|value| value.0 >= 2)
-                            .map(|value| value.1)
-                            .collect::<String>()
-                            .parse::<f32>()
-                            .unwrap()
-                            * 10.0) as i32;
+                        Some((token.to_owned(), weight))
+                    })
+                    .filter(|(_, weight)| *weight != 0)
+                    .collect();
+                // Stable ascending sort then reverse keeps the original
+                // tie-breaking (last listed entry wins) for equal weights.
+                weighted.sort_by_key(|(_, weight)| *weight);
+                weighted.reverse();
+
+                let headers = req.headers_mut();
+                match weighted.first().map(|(token, _)| token.as_str()) {
+                    Some("*") => {
+                        headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static("br"));
                     }
-                    temp2
-                })
-                .filter(|header_value| header_value.1 != 0)
-                .collect::<Vec<_>>();
-            accept_encodings.sort_by_key(|key| key.1);
-            accept_encodings.reverse();
-            let accept_encodings = accept_encodings
-                .iter()
-                .map(|header_value| &header_value.0[..])
-                .collect::<Vec<_>>();
-            if accept_encodings.len() >= 2 {
-                *headers.get_mut("Accept-Encoding").unwrap() = accept_encodings[0].parse().unwrap();
-            } else if accept_encodings.len() == 0 {
-                headers.remove("Accept-Encoding");
-            } else if accept_encodings[0] == "*" {
-                *headers.get_mut("Accept-Encoding").unwrap() = "br".parse().unwrap();
-            } else {
-                *headers.get_mut("Accept-Encoding").unwrap() = accept_encodings[0].parse().unwrap();
+                    Some(token) => {
+                        if let Ok(value) = HeaderValue::from_str(token) {
+                            headers.insert(header::ACCEPT_ENCODING, value);
+                        }
+                    }
+                    None => {
+                        headers.remove(header::ACCEPT_ENCODING);
+                    }
+                }
             }
         }
         let fut = self.service.call(req);
