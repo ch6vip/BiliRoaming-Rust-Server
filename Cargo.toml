@@ -19,7 +19,7 @@ futures = "0.3.25"
 tokio = { version = "1.22.0", features = ["full"] }
 pcre2 = "0.2.3"
 ctrlc = "3.2.3"
-rand = "0.8.5"
+rand = "0.10.3"
 actix-governor = "0.10.0"
 base64 = "0.21.0"
 urlencoding = "2.1.2"
