@@ -131,25 +131,54 @@ async fn api_accesskey(req: HttpRequest) -> impl Responder {
     handle_api_access_key_request(&req).await
 }
 
+/// Extract a safe redirect host from a client-supplied `Host`/`authority`.
+///
+/// The `Host` header is attacker controlled, so it must not be echoed verbatim
+/// into `Location`: a value like `evil.example` or `a@b` turns this endpoint
+/// into an open redirect. Only DNS-style names, IPv4 literals and bracketed
+/// IPv6 literals are accepted; anything else is rejected and the caller
+/// answers 400.
+fn redirect_host(host: &str) -> Option<&str> {
+    // Strip the optional `:port` suffix without allocating.
+    let host = if let Some(rest) = host.strip_prefix('[') {
+        // IPv6 literal: keep the brackets, drop everything after `]`.
+        let end = rest.find(']')?;
+        &host[..end + 2]
+    } else {
+        host.split(':').next().unwrap_or("")
+    };
+    if host.is_empty() {
+        return None;
+    }
+    // Reject characters that would change the authority or inject a header.
+    let valid = host.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'[' | b']' | b':')
+    });
+    if !valid {
+        return None;
+    }
+    // Require at least one dot for names, or a literal in brackets.
+    if host.starts_with('[') || host.contains('.') {
+        Some(host)
+    } else {
+        None
+    }
+}
+
 async fn http2https_handler(req: HttpRequest) -> impl Responder {
     let https_port = req.app_data::<u16>().unwrap();
     let uri = req.uri();
-    let host = match req.headers().get("Host") {
-        Some(host) => host.to_str().unwrap_or(""),
-        _ => match req.headers().get("authority") {
-            Some(host) => host.to_str().unwrap_or(""),
-            _ => {
-                error!("无法获取host");
-                ""
-            }
-        },
-    };
-    let host = {
-        if host.contains(":") {
-            host.split(":").collect::<Vec<&str>>()[0]
-        } else {
-            host
-        }
+    let raw_host = req
+        .headers()
+        .get("Host")
+        .or_else(|| req.headers().get("authority"))
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    let Some(host) = redirect_host(raw_host) else {
+        error!("无法获取合法 host, 拒绝重定向");
+        return HttpResponse::BadRequest()
+            .content_type(ContentType::json())
+            .body(r#"{"code":-400,"message":"无效的 Host 头"}"#);
     };
 
     let path_and_query = if let Some(value) = uri.path_and_query() {
@@ -369,5 +398,42 @@ fn main() -> std::io::Result<()> {
         .run();
 
         rt.block_on(async { join!(web_background, web_main).1 })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redirect_host;
+
+    #[test]
+    fn redirect_host_accepts_legitimate_hosts() {
+        assert_eq!(redirect_host("example.com"), Some("example.com"));
+        assert_eq!(redirect_host("example.com:2662"), Some("example.com"));
+        assert_eq!(
+            redirect_host("sub.example.com:8443"),
+            Some("sub.example.com")
+        );
+        assert_eq!(redirect_host("127.0.0.1:8080"), Some("127.0.0.1"));
+        assert_eq!(redirect_host("[2001:db8::1]:8443"), Some("[2001:db8::1]"));
+        assert_eq!(redirect_host("[::1]"), Some("[::1]"));
+    }
+
+    /// 开放重定向回归：这些值在修复前都会被原样拼进 `Location`。
+    #[test]
+    fn redirect_host_rejects_open_redirect_payloads() {
+        // 无点号的裸主机名（可解析到攻击者控制的搜索域/内网名）
+        assert_eq!(redirect_host("evil"), None);
+        // 会改变 authority 语义的字符
+        assert_eq!(redirect_host("evil.com@attacker.com"), None);
+        assert_eq!(redirect_host("evil.com/attacker"), None);
+        assert_eq!(redirect_host("evil.com#@attacker"), None);
+        assert_eq!(redirect_host("evil.com?a=b"), None);
+        assert_eq!(redirect_host("evil.com\tX"), None);
+        assert_eq!(redirect_host("evil.com X"), None);
+        // 缺失/空值
+        assert_eq!(redirect_host(""), None);
+        assert_eq!(redirect_host(":"), None);
+        // 未闭合的 IPv6 字面量
+        assert_eq!(redirect_host("[2001:db8::1"), None);
     }
 }

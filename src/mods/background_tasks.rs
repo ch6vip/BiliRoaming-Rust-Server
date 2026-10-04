@@ -126,7 +126,8 @@ pub async fn background_task_run(
                             .unwrap_or("0".to_string())
                             .as_str()
                             .parse::<u32>()
-                            .unwrap();
+                            // Redis 中若存在非数字脏值，按“无失败记录”处理而不是 panic。
+                            .unwrap_or(0);
                         if num == 4 {
                             bili_runtime.redis_set(&redis_key, "1", 0).await
                         } else {
@@ -160,7 +161,7 @@ pub async fn background_task_run(
                         HealthReportType::Others(_) => {
                             send_report(redis_pool, report_config, &value)
                                 .await
-                                .unwrap();
+                                .unwrap_or_default();
                             return Ok(());
                         }
                     };
