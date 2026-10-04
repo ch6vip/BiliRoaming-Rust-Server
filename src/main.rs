@@ -184,11 +184,19 @@ fn main() -> std::io::Result<()> {
     let env = env_logger::Env::default().filter_or(env_logger::DEFAULT_FILTER_ENV, "info");
     env_logger::Builder::from_env(env)
         .format(|buf, record| {
+            // env_logger 0.11 removed `Formatter::default_styled_level`; the
+            // replacement is `default_level_style`, which returns an
+            // `anstyle::Style` that renders as the SGR start code and, with the
+            // alternate flag, as the matching reset code.
+            let level_style = buf.default_level_style(record.level());
+            let level = record.level();
             writeln!(
                 buf,
-                "[{}][{:>5}] {}",
+                "[{}][{}{:>5}{:#}] {}",
                 Local::now().format("%Y-%m-%d %H:%M:%S"),
-                buf.default_styled_level(record.level()),
+                level_style,
+                level,
+                level_style,
                 &record.args()
             )
         })
