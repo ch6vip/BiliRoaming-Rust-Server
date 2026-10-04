@@ -898,7 +898,11 @@ pub async fn errorurl_reg(url: &str) -> Option<u8> {
     for index in 1..=8usize {
         match &caps.get(index) {
             Some(value) => {
-                res_url = unsafe { std::str::from_utf8_unchecked(value.as_bytes()) };
+                // 捕获组只匹配 ASCII 字面路径；这里仍做安全解码，
+                // 不再依赖 `unsafe` 来维持该不变量。
+                if let Ok(text) = std::str::from_utf8(value.as_bytes()) {
+                    res_url = text;
+                }
                 break;
             }
             None => (),

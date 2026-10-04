@@ -1,5 +1,5 @@
 use actix_governor::{Governor, GovernorConfigBuilder, KeyExtractor};
-use actix_web::{body::to_bytes, test::TestRequest, web, App, HttpResponse};
+use actix_web::{body::to_bytes, test::TestRequest, web, App, HttpRequest, HttpResponse};
 use biliroaming_rust_server::mods::{
     background_tasks::update_cached_playurl_background,
     cache::{ep_availability, get_cached_ep_area, get_cached_playurl, update_area_cache},
@@ -8,6 +8,7 @@ use biliroaming_rust_server::mods::{
         blocked_content, handle_api_access_key_request, handle_playurl_request,
         handle_search_request, parse_search_remake, valid_query_sign,
     },
+    middleware::compress::ChangeCompressPriority,
     push::send_report,
     rate_limit::BiliUserToken,
     types::*,
@@ -276,6 +277,71 @@ async fn rate_limit_cannot_be_reset_with_token_header_or_source_port() {
         .app_data(app_data(redis.pool.clone(), cfg))
         .to_srv_request();
     assert_eq!(BiliUserToken.extract(&req).unwrap(), "192.0.2.55");
+}
+
+async fn echo_accept_encoding(req: HttpRequest) -> HttpResponse {
+    HttpResponse::Ok().body(
+        req.headers()
+            .get("Accept-Encoding")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("<none>")
+            .to_owned(),
+    )
+}
+
+/// `Accept-Encoding` 完全由客户端控制：非法 `q` 值必须退化为“未知权重”，
+/// 而不是让 worker panic。这是 `compress.rs` 中 `parse::<f32>().unwrap()` 的回归测试。
+#[actix_web::test]
+async fn malformed_accept_encoding_is_tolerated_and_ranked() {
+    let app = actix_web::test::init_service(
+        App::new()
+            .wrap(ChangeCompressPriority)
+            .default_service(web::to(echo_accept_encoding)),
+    )
+    .await;
+
+    // 下列每一项在修复前都能让中间件 panic。
+    for header in ["x;yy", "gzip;q=", "gzip;q=abc", "gzip;foo", ";;;", ",,,"] {
+        let req = TestRequest::get()
+            .uri("/")
+            .insert_header(("Accept-Encoding", header))
+            .to_request();
+        let response = actix_web::test::call_service(&app, req).await;
+        assert_eq!(
+            response.status().as_u16(),
+            200,
+            "Accept-Encoding: {header:?} 不应导致 panic"
+        );
+        // 没有任何可用编码时，整个头被移除。
+        let body = to_bytes(response.into_body()).await.unwrap();
+        assert_eq!(
+            std::str::from_utf8(&body).unwrap(),
+            "<none>",
+            "Accept-Encoding: {header:?}"
+        );
+    }
+
+    // 合法输入仍按权重挑出最优项，并把请求头改写为该编码。
+    for (header, expected) in [
+        ("gzip, br", "br"),
+        ("gzip;q=0.5, deflate;q=0.9", "deflate"),
+        ("gzip", "gzip"),
+        ("identity", "identity"),
+        ("*", "br"),
+    ] {
+        let req = TestRequest::get()
+            .uri("/")
+            .insert_header(("Accept-Encoding", header))
+            .to_request();
+        let response = actix_web::test::call_service(&app, req).await;
+        assert_eq!(response.status().as_u16(), 200);
+        let body = to_bytes(response.into_body()).await.unwrap();
+        assert_eq!(
+            std::str::from_utf8(&body).unwrap(),
+            expected,
+            "Accept-Encoding: {header:?}"
+        );
+    }
 }
 
 #[actix_web::test]

@@ -607,13 +607,12 @@ impl<'cache_type> CacheType<'cache_type> {
         match self {
             CacheType::Playurl(params) => {
                 let mut key = String::with_capacity(32);
-                // not safe, 1 + 48 = 49, num 1's ascii...
-                let area_num_str =
-                    unsafe { String::from_utf8_unchecked(vec![params.area_num + 48]) };
-                let is_tv_str =
-                    unsafe { String::from_utf8_unchecked(vec![params.is_tv as u8 + 48]) };
+                // 1..=4 映射到 '1'..'4'；用 char 转换而不是 unchecked 字节构造，
+                // 避免 area_num 越界时构造出非法 UTF-8 触发 UB。
+                let area_num_str = char::from(params.area_num.saturating_add(48)).to_string();
+                let is_tv_str = char::from(u8::from(params.is_tv).saturating_add(48)).to_string();
                 let user_is_vip_str =
-                    unsafe { String::from_utf8_unchecked(vec![params.is_vip as u8 + 48]) };
+                    char::from(u8::from(params.is_vip).saturating_add(48)).to_string();
                 match params.is_app {
                     true => {
                         key.push_str("e");
@@ -1866,13 +1865,9 @@ impl UpstreamRawResp {
         let headers_hashmap = &self.resp_header;
         for (key, value) in headers_hashmap {
             headers.push(key.to_owned());
-            unsafe {
-                headers.push(String::from_utf8_unchecked(vec![58u8, 32]));
-            }
+            headers.push(": ".to_owned());
             headers.push(value.to_owned());
-            unsafe {
-                headers.push(String::from_utf8_unchecked(vec![13u8, 10]));
-            }
+            headers.push("\r\n".to_owned());
         }
         headers.join("")
     }
