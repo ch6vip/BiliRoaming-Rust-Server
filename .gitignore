@@ -13,3 +13,13 @@ __pycache__/
 /config.local.json
 /biliroaming_rust_server_patched
 *.log
+
+# 配置迁移与手工备份（含 api_sign/access_key/refresh_token，勿提交）
+/config.json.bak-*
+/config.json.*.bak
+/config.yml.bak-*
+/config.yml.*.bak
+/config.yaml.bak-*
+/config.yaml.*.bak
+# 轮转日志（*.log 只覆盖无后缀名）
+*.log.*

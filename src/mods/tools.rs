@@ -254,6 +254,18 @@ pub fn remove_parameters_playurl(
 
 #[inline]
 /// 大会员获取非大会员专享视频时, 且缓存为非大会员时: 去除大会员专享清晰度
+///
+/// ⚠️ 当前**无任何调用点**（全仓库仅此定义）。保留而非删除是有意为之：
+/// 删除前请确认没有其它分支/本地脚本依赖它。
+///
+/// 若要重新启用，需先修掉函数体内的两处隐患：
+/// - `data_json["dash"]["video"].as_array_mut().unwrap()`：上游返回
+///   `need_vip:true` 但无 `dash` 字段（例如纯 flv 响应）时会 panic；
+/// - `&data[..13]` / `&data[13..]`：`data` 短于 13 字节或切在 UTF-8
+///   边界外时会 panic。
+///
+/// 其“剥离 need_vip 画质”的职责目前由在用的 `check_vip_status_from_playurl`
+/// （本文件:9，调用点见 upstream_res.rs）承担。
 pub async fn remove_viponly_clarity<'a>(
     playurl_type: &'a PlayurlType,
     data: &'a str,
