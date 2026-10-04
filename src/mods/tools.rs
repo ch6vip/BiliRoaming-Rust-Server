@@ -186,14 +186,10 @@ pub fn strip_need_vip_qualities(data: &mut serde_json::Value) -> bool {
         let kept_pairs: Vec<(serde_json::Value, serde_json::Value)> = aq_snapshot
             .into_iter()
             .zip(ad_snapshot.into_iter())
-            .filter(|(q, _)| {
-                q.as_u64()
-                    .map_or(false, |qid| keep.contains(&qid))
-            })
+            .filter(|(q, _)| q.as_u64().map_or(false, |qid| keep.contains(&qid)))
             .collect();
         let new_aq: Vec<serde_json::Value> = kept_pairs.iter().map(|(q, _)| q.clone()).collect();
-        let new_ad: Vec<serde_json::Value> =
-            kept_pairs.into_iter().map(|(_, d)| d).collect();
+        let new_ad: Vec<serde_json::Value> = kept_pairs.into_iter().map(|(_, d)| d).collect();
         data["accept_quality"] = serde_json::Value::Array(new_aq);
         data["accept_description"] = serde_json::Value::Array(new_ad);
     }

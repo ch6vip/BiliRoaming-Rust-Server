@@ -975,26 +975,26 @@ pub async fn get_upstream_bili_playurl(
                 )
             };
             if vip_flag && (!params.is_vip) {
-                    match get_ep_need_vip(params.ep_id, bili_runtime).await {
-                        Some(ep_need_vip) => {
-                            if ep_need_vip == 1 {
-                                update_cached_ep_vip_status_background(
-                                    true,
-                                    vec![EpInfo {
-                                        ep_id: params.ep_id.parse::<u64>().unwrap_or(233),
-                                        ..Default::default()
-                                    }],
-                                    bili_runtime,
-                                )
-                                .await;
-                            }
-                            error!("[GET PLAYURL][U] UID {} | AK {} | AREA {} | EP {} -> 非大会员用户获取了大会员独享视频, 可能大会员状态变动或限免, 并且尝试更新ep_need_vip成功" , user_info.uid, "[redacted]", params.area.to_ascii_uppercase(), params.ep_id);
+                match get_ep_need_vip(params.ep_id, bili_runtime).await {
+                    Some(ep_need_vip) => {
+                        if ep_need_vip == 1 {
+                            update_cached_ep_vip_status_background(
+                                true,
+                                vec![EpInfo {
+                                    ep_id: params.ep_id.parse::<u64>().unwrap_or(233),
+                                    ..Default::default()
+                                }],
+                                bili_runtime,
+                            )
+                            .await;
                         }
-                        None => {
-                            error!("[GET PLAYURL][U] UID {} | AK {} | AREA {} | EP {} -> 非大会员用户获取了大会员独享视频, 可能大会员状态变动或限免, 并且尝试更新ep_need_vip失败" , user_info.uid, "[redacted]", params.area.to_ascii_uppercase(), params.ep_id);
-                        }
+                        error!("[GET PLAYURL][U] UID {} | AK {} | AREA {} | EP {} -> 非大会员用户获取了大会员独享视频, 可能大会员状态变动或限免, 并且尝试更新ep_need_vip成功" , user_info.uid, "[redacted]", params.area.to_ascii_uppercase(), params.ep_id);
                     }
-                    report_health(
+                    None => {
+                        error!("[GET PLAYURL][U] UID {} | AK {} | AREA {} | EP {} -> 非大会员用户获取了大会员独享视频, 可能大会员状态变动或限免, 并且尝试更新ep_need_vip失败" , user_info.uid, "[redacted]", params.area.to_ascii_uppercase(), params.ep_id);
+                    }
+                }
+                report_health(
                         HealthReportType::Playurl(HealthData {
                             area_num: params.area_num,
                             is_200_ok: true,
@@ -1010,10 +1010,10 @@ pub async fn get_upstream_bili_playurl(
                         bili_runtime,
                     )
                     .await;
-                    return Err(EType::OtherError(
-                        -10403,
-                        "检测到可能刚刚买了带会员, 刷新缓存中, 请稍后重试喵",
-                    ));
+                return Err(EType::OtherError(
+                    -10403,
+                    "检测到可能刚刚买了带会员, 刷新缓存中, 请稍后重试喵",
+                ));
             }
         }
     }
