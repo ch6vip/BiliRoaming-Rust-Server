@@ -9,3 +9,7 @@
 # Python 审计脚本的字节码缓存
 __pycache__/
 *.pyc
+# 本地运行时产物（runbook：勿提交）
+/config.local.json
+/biliroaming_rust_server_patched
+*.log
