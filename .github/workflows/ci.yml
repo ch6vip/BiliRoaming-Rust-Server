@@ -59,6 +59,10 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - build
+    # 创建/更新 release 需要写权限；仓库默认 workflow 权限是 read，
+    # 不显式声明会因 GITHUB_TOKEN 无权创建 release 而失败。
+    permissions:
+      contents: write
     steps:
     - uses: actions/checkout@v3
 
@@ -67,18 +71,22 @@ jobs:
       with:
         name: biliroaming-rust-server-${{ github.run_number }}
     - name: Update Alpha Release
-      uses: mini-bomba/create-github-release@v1.1.3
+      # v1.1.3 的镜像基于 Debian buster（已 EOL，apt 源 404），容器构建必然失败；
+      # v1.2.0 起改用 python:3.12-alpine。
+      uses: mini-bomba/create-github-release@v1.2.0
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         prerelease: true
         tag: alpha-releases
         name: Alpha-Release
+        # 原先引用的 env.GIT_HASH / env.GIT_MESSAGE 从未被赋值（workflow 里只有引用），
+        # 改为使用 GitHub 内置上下文。
         body: |
-            This automatic prerelease is built from commit ${{ env.GIT_HASH }} and was triggered by @${{ github.actor }}
+            This automatic prerelease is built from commit ${{ github.sha }} and was triggered by @${{ github.actor }}
             [Github Actions workflow run that built this prerelease](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
             Commit message:
-            ${{ env.GIT_MESSAGE }}
+            ${{ github.event.head_commit.message }}
         files: |
           ./biliroaming_rust_server
         clear_attachments: true
@@ -89,6 +97,9 @@ jobs:
     needs:
       - build
     runs-on: ubuntu-latest
+    # 同 alpha：创建 release 需要 contents: write。
+    permissions:
+      contents: write
     steps:
     - uses: actions/checkout@v3
 
@@ -97,7 +108,8 @@ jobs:
       with:
         name: biliroaming-rust-server-${{ github.run_number }}
     - name: Release
-      uses: softprops/action-gh-release@v1
+      # v1 是 2022 年的旧 tag；v2 与现有 files/token 用法兼容。
+      uses: softprops/action-gh-release@v2
       with:
         files: |
           ./biliroaming_rust_server
